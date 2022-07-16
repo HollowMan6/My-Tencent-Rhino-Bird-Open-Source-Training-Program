@@ -23,4 +23,4 @@ This is my work and record under Tencent Rhino-Bird Open-Source Training Program
 
 |  Year  | Community |  Project Name  |  Level  |  Selected List  |  Application Material  |
 |  ----  | ----  | ----  | ----  | ----  | ----  |
-| [2022](https://opensource.tencent.com/summer-of-code)  | [*Kona JDK*](https://github.com/Tencent/OpenSourceTalent/issues/34) | SM2 Key Pair Generation | High | [Click to visit (in Chinese)]([2020-41-2020098](https://lexiangla.com/teams/k100046/docs/34cb1a36042111eda898d647c4fa5509)) | [Click to visit (in Chinese)](2022-Kona-JDK/项目申请书.md) |
+| [2022](https://opensource.tencent.com/summer-of-code)  | [*Kona JDK*](https://github.com/Tencent/OpenSourceTalent/issues/34) | SM2 Key Pair Generation | High | [Click to visit (in Chinese)](https://lexiangla.com/teams/k100046/docs/34cb1a36042111eda898d647c4fa5509) | [Click to visit (in Chinese)](2022-Kona-JDK/项目申请书.md) |
