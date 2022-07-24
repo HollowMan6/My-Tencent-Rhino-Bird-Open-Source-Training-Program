@@ -1,0 +1,2388 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="726" onload="init(evt)" viewBox="0 0 1200 726" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom();
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				clearzoom();
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x = txt.length - 2; x > 0; x--) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom() {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="726.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >allocation-tlab secp256r1_256B-Throughput</text>
+<text id="details" x="10.00" y="709" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="709" > </text>
+<g id="frames">
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:432 (2,102 samples, 0.10%)</title><rect x="1146.1" y="341" width="1.1" height="15.0" fill="rgb(207,46,2)" rx="2" ry="2" />
+<text  x="1149.09" y="351.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (10,478 samples, 0.48%)</title><rect x="561.1" y="261" width="5.8" height="15.0" fill="rgb(212,31,24)" rx="2" ry="2" />
+<text  x="564.15" y="271.5" ></text>
+</g>
+<g >
+<title>java.security.MessageDigest.getInstance:183 (1,574 samples, 0.07%)</title><rect x="42.0" y="293" width="0.8" height="15.0" fill="rgb(252,1,32)" rx="2" ry="2" />
+<text  x="44.97" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.limbsToByteArray:453 (3,676 samples, 0.17%)</title><rect x="1045.1" y="277" width="2.0" height="15.0" fill="rgb(237,122,43)" rx="2" ry="2" />
+<text  x="1048.06" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.DigestBase.&lt;init&gt;:86 (5,230 samples, 0.24%)</title><rect x="20.0" y="117" width="2.8" height="15.0" fill="rgb(213,60,3)" rx="2" ry="2" />
+<text  x="23.00" y="127.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.ForkedMain.main:86 (315 samples, 0.01%)</title><rect x="1189.6" y="661" width="0.1" height="15.0" fill="rgb(205,1,40)" rx="2" ry="2" />
+<text  x="1192.57" y="671.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (9,430 samples, 0.44%)</title><rect x="670.6" y="245" width="5.1" height="15.0" fill="rgb(230,138,13)" rx="2" ry="2" />
+<text  x="673.57" y="255.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:472 (2,618 samples, 0.12%)</title><rect x="46.3" y="309" width="1.4" height="15.0" fill="rgb(205,160,27)" rx="2" ry="2" />
+<text  x="49.25" y="319.5" ></text>
+</g>
+<g >
+<title>java.lang.reflect.Constructor.newInstance:490 (46,114 samples, 2.13%)</title><rect x="16.0" y="197" width="25.1" height="15.0" fill="rgb(229,98,20)" rx="2" ry="2" />
+<text  x="19.00" y="207.5" >j..</text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint.fixed:55 (507,378 samples, 23.42%)</title><rect x="705.4" y="277" width="276.3" height="15.0" fill="rgb(215,153,15)" rx="2" ry="2" />
+<text  x="708.37" y="287.5" >sun.security.ec.point.ProjectivePoint..</text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRight:3375 (64,459 samples, 2.98%)</title><rect x="329.8" y="133" width="35.1" height="15.0" fill="rgb(207,82,4)" rx="2" ry="2" />
+<text  x="332.82" y="143.5" >ja..</text>
+</g>
+<g >
+<title>java.security.MessageDigest.digest:385 (6,820 samples, 0.31%)</title><rect x="502.4" y="213" width="3.7" height="15.0" fill="rgb(239,134,24)" rx="2" ry="2" />
+<text  x="505.35" y="223.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.encode:236 (3,662 samples, 0.17%)</title><rect x="524.9" y="261" width="2.0" height="15.0" fill="rgb(217,86,10)" rx="2" ry="2" />
+<text  x="527.90" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint$Mutable.&lt;init&gt;:104 (15,716 samples, 0.73%)</title><rect x="670.6" y="277" width="8.5" height="15.0" fill="rgb(214,84,47)" rx="2" ry="2" />
+<text  x="673.57" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.subtract:1519 (2,616 samples, 0.12%)</title><rect x="1105.0" y="277" width="1.4" height="15.0" fill="rgb(210,172,40)" rx="2" ry="2" />
+<text  x="1107.99" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.stripLeadingZeroBytes:4398 (2,102 samples, 0.10%)</title><rect x="1146.1" y="309" width="1.1" height="15.0" fill="rgb(221,83,2)" rx="2" ry="2" />
+<text  x="1149.09" y="319.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.subtract:1519 (1,050 samples, 0.05%)</title><rect x="223.9" y="309" width="0.6" height="15.0" fill="rgb(218,147,37)" rx="2" ry="2" />
+<text  x="226.95" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:259 (65,158 samples, 3.01%)</title><rect x="583.1" y="293" width="35.5" height="15.0" fill="rgb(249,179,17)" rx="2" ry="2" />
+<text  x="586.13" y="303.5" >sun..</text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:219 (17,294 samples, 0.80%)</title><rect x="502.4" y="261" width="9.4" height="15.0" fill="rgb(214,91,7)" rx="2" ry="2" />
+<text  x="505.35" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.valueOf:1176 (9,424 samples, 0.44%)</title><rect x="59.7" y="197" width="5.1" height="15.0" fill="rgb(222,29,1)" rx="2" ry="2" />
+<text  x="62.65" y="207.5" ></text>
+</g>
+<g >
+<title>java.security.MessageDigest$Delegate.engineDigest:639 (9,946 samples, 0.46%)</title><rect x="48.2" y="325" width="5.5" height="15.0" fill="rgb(241,185,19)" rx="2" ry="2" />
+<text  x="51.25" y="335.5" ></text>
+</g>
+<g >
+<title>java.nio.ByteBuffer.wrap:394 (16,762 samples, 0.77%)</title><rect x="1092.2" y="229" width="9.1" height="15.0" fill="rgb(229,205,53)" rx="2" ry="2" />
+<text  x="1095.15" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:260 (14,153 samples, 0.65%)</title><rect x="618.6" y="293" width="7.7" height="15.0" fill="rgb(229,174,17)" rx="2" ry="2" />
+<text  x="621.62" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValuePositive:303 (4,206 samples, 0.19%)</title><rect x="370.1" y="149" width="2.3" height="15.0" fill="rgb(226,27,2)" rx="2" ry="2" />
+<text  x="373.06" y="159.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.valueOf:1176 (10,488 samples, 0.48%)</title><rect x="514.1" y="245" width="5.7" height="15.0" fill="rgb(212,176,21)" rx="2" ry="2" />
+<text  x="517.06" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.DigestBase.engineDigest:187 (6,820 samples, 0.31%)</title><rect x="502.4" y="181" width="3.7" height="15.0" fill="rgb(221,53,29)" rx="2" ry="2" />
+<text  x="505.35" y="191.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.subtract:1519 (1,574 samples, 0.07%)</title><rect x="1004.3" y="261" width="0.8" height="15.0" fill="rgb(225,14,35)" rx="2" ry="2" />
+<text  x="1007.27" y="271.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke:43 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="517" width="1178.6" height="15.0" fill="rgb(214,124,25)" rx="2" ry="2" />
+<text  x="13.29" y="527.5" >jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke:43</text>
+</g>
+<g >
+<title>org.sample.jmh_generated.BenchmarkSigning_secp256r1_256B_jmhTest.secp256r1_256B_Throughput:83 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="469" width="1178.6" height="15.0" fill="rgb(206,214,11)" rx="2" ry="2" />
+<text  x="13.29" y="479.5" >org.sample.jmh_generated.BenchmarkSigning_secp256r1_256B_jmhTest.secp256r1_256B_Throughput:83</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.forParameters:90 (313,673 samples, 14.48%)</title><rect x="53.7" y="341" width="170.8" height="15.0" fill="rgb(210,1,19)" rx="2" ry="2" />
+<text  x="56.67" y="351.5" >sun.security.ec.ECDSAO..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValue:298 (246,095 samples, 11.36%)</title><rect x="59.7" y="229" width="134.0" height="15.0" fill="rgb(221,180,49)" rx="2" ry="2" />
+<text  x="62.65" y="239.5" >sun.security.uti..</text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:224 (4,186 samples, 0.19%)</title><rect x="511.8" y="261" width="2.3" height="15.0" fill="rgb(244,51,2)" rx="2" ry="2" />
+<text  x="514.77" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (8,908 samples, 0.41%)</title><rect x="1115.0" y="261" width="4.8" height="15.0" fill="rgb(239,56,40)" rx="2" ry="2" />
+<text  x="1117.98" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1163 (71,760 samples, 3.31%)</title><rect x="271.9" y="85" width="39.1" height="15.0" fill="rgb(241,200,4)" rx="2" ry="2" />
+<text  x="274.89" y="95.5" >jav..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (6,286 samples, 0.29%)</title><rect x="675.7" y="229" width="3.4" height="15.0" fill="rgb(252,68,42)" rx="2" ry="2" />
+<text  x="678.71" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.DigestBase.engineDigest:187 (9,946 samples, 0.46%)</title><rect x="48.2" y="309" width="5.5" height="15.0" fill="rgb(254,161,39)" rx="2" ry="2" />
+<text  x="51.25" y="319.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainder:2343 (176,537 samples, 8.15%)</title><rect x="233.7" y="117" width="96.1" height="15.0" fill="rgb(207,209,16)" rx="2" ry="2" />
+<text  x="236.66" y="127.5" >java.math.B..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:250 (6,810 samples, 0.31%)</title><rect x="1088.4" y="261" width="3.8" height="15.0" fill="rgb(219,13,32)" rx="2" ry="2" />
+<text  x="1091.44" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:143 (13,094 samples, 0.60%)</title><rect x="599.4" y="245" width="7.1" height="15.0" fill="rgb(254,175,25)" rx="2" ry="2" />
+<text  x="602.40" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:64 (15,184 samples, 0.70%)</title><rect x="198.8" y="293" width="8.3" height="15.0" fill="rgb(228,101,13)" rx="2" ry="2" />
+<text  x="201.84" y="303.5" ></text>
+</g>
+<g >
+<title>java.security.SecureRandom.nextBytes:751 (33,544 samples, 1.55%)</title><rect x="502.4" y="325" width="18.2" height="15.0" fill="rgb(252,88,54)" rx="2" ry="2" />
+<text  x="505.35" y="335.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.util.InputStreamDrainer.run:77 (474 samples, 0.02%)</title><rect x="1189.7" y="661" width="0.3" height="15.0" fill="rgb(226,167,3)" rx="2" ry="2" />
+<text  x="1192.74" y="671.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2352 (21,479 samples, 0.99%)</title><rect x="259.9" y="101" width="11.7" height="15.0" fill="rgb(208,50,29)" rx="2" ry="2" />
+<text  x="262.91" y="111.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (13,104 samples, 0.60%)</title><rect x="587.4" y="229" width="7.1" height="15.0" fill="rgb(239,81,8)" rx="2" ry="2" />
+<text  x="590.41" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:64 (5,760 samples, 0.27%)</title><rect x="667.4" y="261" width="3.2" height="15.0" fill="rgb(231,58,14)" rx="2" ry="2" />
+<text  x="670.43" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint.fixed:55 (37,682 samples, 1.74%)</title><rect x="684.8" y="277" width="20.6" height="15.0" fill="rgb(229,168,33)" rx="2" ry="2" />
+<text  x="687.84" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.limbsToByteArray:453 (5,248 samples, 0.24%)</title><rect x="536.3" y="277" width="2.9" height="15.0" fill="rgb(226,196,19)" rx="2" ry="2" />
+<text  x="539.32" y="287.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:458 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="565" width="1178.6" height="15.0" fill="rgb(208,80,46)" rx="2" ry="2" />
+<text  x="13.29" y="575.5" >org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:458</text>
+</g>
+<g >
+<title>java.io.OutputStream.write:122 (8,384 samples, 0.39%)</title><rect x="1181.4" y="309" width="4.6" height="15.0" fill="rgb(246,141,29)" rx="2" ry="2" />
+<text  x="1184.44" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:64 (13,094 samples, 0.60%)</title><rect x="599.4" y="261" width="7.1" height="15.0" fill="rgb(212,196,29)" rx="2" ry="2" />
+<text  x="602.40" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:143 (6,286 samples, 0.29%)</title><rect x="675.7" y="245" width="3.4" height="15.0" fill="rgb(254,71,0)" rx="2" ry="2" />
+<text  x="678.71" y="255.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.GeneratedConstructorAccessor1.newInstance:-1 (46,114 samples, 2.13%)</title><rect x="16.0" y="165" width="25.1" height="15.0" fill="rgb(223,182,3)" rx="2" ry="2" />
+<text  x="19.00" y="175.5" >j..</text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:245 (2,626 samples, 0.12%)</title><rect x="1141.2" y="357" width="1.5" height="15.0" fill="rgb(235,210,14)" rx="2" ry="2" />
+<text  x="1144.24" y="367.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:268 (10,482 samples, 0.48%)</title><rect x="679.1" y="293" width="5.7" height="15.0" fill="rgb(235,50,23)" rx="2" ry="2" />
+<text  x="682.13" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValuePositive:305 (163,749 samples, 7.56%)</title><rect x="372.4" y="149" width="89.1" height="15.0" fill="rgb(251,177,28)" rx="2" ry="2" />
+<text  x="375.36" y="159.5" >sun.securi..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.asByteArray:598 (20,954 samples, 0.97%)</title><rect x="536.3" y="293" width="11.4" height="15.0" fill="rgb(240,165,22)" rx="2" ry="2" />
+<text  x="539.32" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerModuloP.multiplicativeInverse:159 (57,603 samples, 2.66%)</title><rect x="1001.7" y="277" width="31.4" height="15.0" fill="rgb(252,78,5)" rx="2" ry="2" />
+<text  x="1004.70" y="287.5" >su..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (8,910 samples, 0.41%)</title><rect x="594.5" y="261" width="4.9" height="15.0" fill="rgb(212,168,51)" rx="2" ry="2" />
+<text  x="597.55" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2351 (48,188 samples, 2.22%)</title><rect x="233.7" y="101" width="26.2" height="15.0" fill="rgb(221,181,2)" rx="2" ry="2" />
+<text  x="236.66" y="111.5" >j..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getSmallValue:163 (2,618 samples, 0.12%)</title><rect x="195.4" y="293" width="1.4" height="15.0" fill="rgb(234,75,2)" rx="2" ry="2" />
+<text  x="198.41" y="303.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:475 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="549" width="1178.6" height="15.0" fill="rgb(229,111,50)" rx="2" ry="2" />
+<text  x="13.29" y="559.5" >org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:475</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (8,908 samples, 0.41%)</title><rect x="1115.0" y="245" width="4.8" height="15.0" fill="rgb(254,198,5)" rx="2" ry="2" />
+<text  x="1117.98" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerModuloP.pow:192 (13,094 samples, 0.60%)</title><rect x="1018.5" y="261" width="7.2" height="15.0" fill="rgb(219,150,38)" rx="2" ry="2" />
+<text  x="1021.54" y="271.5" ></text>
+</g>
+<g >
+<title>java.nio.ByteBuffer.wrap:394 (3,134 samples, 0.14%)</title><rect x="1056.5" y="229" width="1.7" height="15.0" fill="rgb(210,15,49)" rx="2" ry="2" />
+<text  x="1059.47" y="239.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRight:3375 (58,682 samples, 2.71%)</title><rect x="161.7" y="197" width="32.0" height="15.0" fill="rgb(225,183,51)" rx="2" ry="2" />
+<text  x="164.73" y="207.5" >ja..</text>
+</g>
+<g >
+<title>java.math.BigInteger.mod:2699 (176,537 samples, 8.15%)</title><rect x="233.7" y="133" width="96.1" height="15.0" fill="rgb(213,219,6)" rx="2" ry="2" />
+<text  x="236.66" y="143.5" >java.math.B..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:153 (256,200 samples, 11.83%)</title><rect x="225.4" y="229" width="139.5" height="15.0" fill="rgb(212,196,47)" rx="2" ry="2" />
+<text  x="228.38" y="239.5" >sun.security.util..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (12,566 samples, 0.58%)</title><rect x="1005.1" y="245" width="6.9" height="15.0" fill="rgb(233,40,6)" rx="2" ry="2" />
+<text  x="1008.13" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get1:64 (4,198 samples, 0.19%)</title><rect x="1112.7" y="261" width="2.3" height="15.0" fill="rgb(223,81,52)" rx="2" ry="2" />
+<text  x="1115.70" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.mod:2699 (177,989 samples, 8.22%)</title><rect x="64.8" y="197" width="96.9" height="15.0" fill="rgb(246,154,27)" rx="2" ry="2" />
+<text  x="67.79" y="207.5" >java.math.B..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:64 (241,308 samples, 11.14%)</title><rect x="364.9" y="245" width="131.5" height="15.0" fill="rgb(213,48,53)" rx="2" ry="2" />
+<text  x="367.93" y="255.5" >sun.security.uti..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.asByteArray:598 (14,160 samples, 0.65%)</title><rect x="1045.1" y="293" width="7.7" height="15.0" fill="rgb(220,174,23)" rx="2" ry="2" />
+<text  x="1048.06" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:179 (13,108 samples, 0.61%)</title><rect x="1073.0" y="309" width="7.2" height="15.0" fill="rgb(236,75,50)" rx="2" ry="2" />
+<text  x="1076.03" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:236 (59,752 samples, 2.76%)</title><rect x="10.3" y="373" width="32.5" height="15.0" fill="rgb(250,181,46)" rx="2" ry="2" />
+<text  x="13.29" y="383.5" >su..</text>
+</g>
+<g >
+<title>java.nio.ByteBuffer.wrap:394 (5,756 samples, 0.27%)</title><rect x="1085.3" y="229" width="3.1" height="15.0" fill="rgb(212,56,41)" rx="2" ry="2" />
+<text  x="1088.31" y="239.5" ></text>
+</g>
+<g >
+<title>java.util.Optional.map:265 (499,618 samples, 23.06%)</title><rect x="224.5" y="325" width="272.2" height="15.0" fill="rgb(223,109,41)" rx="2" ry="2" />
+<text  x="227.52" y="335.5" >java.util.Optional.map:265</text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:251 (5,776 samples, 0.27%)</title><rect x="1152.1" y="357" width="3.1" height="15.0" fill="rgb(222,154,20)" rx="2" ry="2" />
+<text  x="1155.08" y="367.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.getDigestValue:338 (9,946 samples, 0.46%)</title><rect x="48.2" y="357" width="5.5" height="15.0" fill="rgb(215,0,8)" rx="2" ry="2" />
+<text  x="51.25" y="367.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (6,286 samples, 0.29%)</title><rect x="675.7" y="213" width="3.4" height="15.0" fill="rgb(226,179,7)" rx="2" ry="2" />
+<text  x="678.71" y="223.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigestImpl:390 (33,544 samples, 1.55%)</title><rect x="502.4" y="341" width="18.2" height="15.0" fill="rgb(242,13,41)" rx="2" ry="2" />
+<text  x="505.35" y="351.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$MutableElement.fixed:602 (9,956 samples, 0.46%)</title><rect x="1119.8" y="261" width="5.5" height="15.0" fill="rgb(246,204,33)" rx="2" ry="2" />
+<text  x="1122.83" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.&lt;init&gt;:68 (498,040 samples, 22.99%)</title><rect x="225.4" y="277" width="271.3" height="15.0" fill="rgb(214,106,52)" rx="2" ry="2" />
+<text  x="228.38" y="287.5" >sun.security.ec.ECDSAOperations.&lt;ini..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideOneWord:1100 (29,067 samples, 1.34%)</title><rect x="404.9" y="53" width="15.8" height="15.0" fill="rgb(242,206,22)" rx="2" ry="2" />
+<text  x="407.89" y="63.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint$Mutable.&lt;init&gt;:103 (22,004 samples, 1.02%)</title><rect x="594.5" y="277" width="12.0" height="15.0" fill="rgb(247,202,45)" rx="2" ry="2" />
+<text  x="597.55" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:164 (70,171 samples, 3.24%)</title><rect x="1001.7" y="309" width="38.2" height="15.0" fill="rgb(236,175,3)" rx="2" ry="2" />
+<text  x="1004.70" y="319.5" >sun..</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:168 (11,504 samples, 0.53%)</title><rect x="1052.8" y="309" width="6.2" height="15.0" fill="rgb(217,160,37)" rx="2" ry="2" />
+<text  x="1055.77" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (10,478 samples, 0.48%)</title><rect x="561.1" y="277" width="5.8" height="15.0" fill="rgb(212,182,23)" rx="2" ry="2" />
+<text  x="564.15" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerValue.&lt;init&gt;:245 (14,654 samples, 0.68%)</title><rect x="1165.8" y="341" width="7.9" height="15.0" fill="rgb(227,126,45)" rx="2" ry="2" />
+<text  x="1168.75" y="351.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.ThreadPoolExecutor.runWorker:1128 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="629" width="1178.6" height="15.0" fill="rgb(246,189,18)" rx="2" ry="2" />
+<text  x="13.29" y="639.5" >java.util.concurrent.ThreadPoolExecutor.runWorker:1128</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (6,286 samples, 0.29%)</title><rect x="615.2" y="213" width="3.4" height="15.0" fill="rgb(227,206,2)" rx="2" ry="2" />
+<text  x="618.20" y="223.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.engineSign:464 (1,996,697 samples, 92.17%)</title><rect x="53.7" y="373" width="1087.5" height="15.0" fill="rgb(218,78,8)" rx="2" ry="2" />
+<text  x="56.67" y="383.5" >sun.security.ec.ECDSASignature.engineSign:464</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (13,104 samples, 0.60%)</title><rect x="652.3" y="261" width="7.1" height="15.0" fill="rgb(230,4,23)" rx="2" ry="2" />
+<text  x="655.30" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (15,912 samples, 0.73%)</title><rect x="606.5" y="245" width="8.7" height="15.0" fill="rgb(226,213,34)" rx="2" ry="2" />
+<text  x="609.53" y="255.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3413 (20,944 samples, 0.97%)</title><rect x="168.3" y="181" width="11.4" height="15.0" fill="rgb(234,11,8)" rx="2" ry="2" />
+<text  x="171.29" y="191.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.&lt;init&gt;:124 (2,618 samples, 0.12%)</title><rect x="195.4" y="309" width="1.4" height="15.0" fill="rgb(248,56,52)" rx="2" ry="2" />
+<text  x="198.41" y="319.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.NativeMethodAccessorImpl.invoke:62 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="501" width="1178.6" height="15.0" fill="rgb(238,186,27)" rx="2" ry="2" />
+<text  x="13.29" y="511.5" >jdk.internal.reflect.NativeMethodAccessorImpl.invoke:62</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:185 (24,620 samples, 1.14%)</title><rect x="1088.4" y="309" width="13.5" height="15.0" fill="rgb(236,181,48)" rx="2" ry="2" />
+<text  x="1091.44" y="319.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1203 (18,864 samples, 0.87%)</title><rect x="275.0" y="69" width="10.3" height="15.0" fill="rgb(221,31,10)" rx="2" ry="2" />
+<text  x="278.03" y="79.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (5,760 samples, 0.27%)</title><rect x="667.4" y="229" width="3.2" height="15.0" fill="rgb(208,149,11)" rx="2" ry="2" />
+<text  x="670.43" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (8,920 samples, 0.41%)</title><rect x="566.9" y="277" width="4.8" height="15.0" fill="rgb(234,132,31)" rx="2" ry="2" />
+<text  x="569.85" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValuePositive:305 (177,989 samples, 8.22%)</title><rect x="64.8" y="213" width="96.9" height="15.0" fill="rgb(219,214,49)" rx="2" ry="2" />
+<text  x="67.79" y="223.5" >sun.securit..</text>
+</g>
+<g >
+<title>java.math.BigInteger.subtract:1530 (5,762 samples, 0.27%)</title><rect x="1101.9" y="261" width="3.1" height="15.0" fill="rgb(217,20,1)" rx="2" ry="2" />
+<text  x="1104.85" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerValue.&lt;init&gt;:234 (2,620 samples, 0.12%)</title><rect x="1172.3" y="325" width="1.4" height="15.0" fill="rgb(242,98,11)" rx="2" ry="2" />
+<text  x="1175.31" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigestImpl:420 (1,183,406 samples, 54.63%)</title><rect x="496.7" y="357" width="644.5" height="15.0" fill="rgb(222,69,17)" rx="2" ry="2" />
+<text  x="499.65" y="367.5" >sun.security.ec.ECDSASignature.signDigestImpl:420</text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:255 (24,537 samples, 1.13%)</title><rect x="1160.4" y="357" width="13.3" height="15.0" fill="rgb(226,140,15)" rx="2" ry="2" />
+<text  x="1163.37" y="367.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerOutputStream.putInteger:165 (5,768 samples, 0.27%)</title><rect x="1156.4" y="341" width="3.1" height="15.0" fill="rgb(208,186,17)" rx="2" ry="2" />
+<text  x="1159.37" y="351.5" ></text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.toByteArray:211 (5,256 samples, 0.24%)</title><rect x="1186.0" y="325" width="2.9" height="15.0" fill="rgb(250,126,10)" rx="2" ry="2" />
+<text  x="1189.01" y="335.5" ></text>
+</g>
+<g >
+<title>java.security.Provider.getService:1299 (2,098 samples, 0.10%)</title><rect x="12.9" y="229" width="1.1" height="15.0" fill="rgb(222,27,3)" rx="2" ry="2" />
+<text  x="15.85" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerModuloP.pow:201 (13,601 samples, 0.63%)</title><rect x="1025.7" y="261" width="7.4" height="15.0" fill="rgb(215,37,49)" rx="2" ry="2" />
+<text  x="1028.67" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.jca.ProviderList.getService:380 (3,668 samples, 0.17%)</title><rect x="12.9" y="245" width="2.0" height="15.0" fill="rgb(252,224,40)" rx="2" ry="2" />
+<text  x="15.85" y="255.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:103 (22,518 samples, 1.04%)</title><rect x="247.6" y="85" width="12.3" height="15.0" fill="rgb(247,33,49)" rx="2" ry="2" />
+<text  x="250.64" y="95.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.encode:236 (5,756 samples, 0.27%)</title><rect x="1085.3" y="245" width="3.1" height="15.0" fill="rgb(225,65,4)" rx="2" ry="2" />
+<text  x="1088.31" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get1:64 (12,048 samples, 0.56%)</title><rect x="1012.0" y="245" width="6.5" height="15.0" fill="rgb(207,180,29)" rx="2" ry="2" />
+<text  x="1014.98" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.DRBG.engineNextBytes:233 (33,544 samples, 1.55%)</title><rect x="502.4" y="309" width="18.2" height="15.0" fill="rgb(230,133,26)" rx="2" ry="2" />
+<text  x="505.35" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (9,438 samples, 0.44%)</title><rect x="618.6" y="261" width="5.2" height="15.0" fill="rgb(228,106,19)" rx="2" ry="2" />
+<text  x="621.62" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:252 (1,052 samples, 0.05%)</title><rect x="1079.6" y="261" width="0.6" height="15.0" fill="rgb(220,40,30)" rx="2" ry="2" />
+<text  x="1082.60" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerModuloP.pow:201 (9,956 samples, 0.46%)</title><rect x="1119.8" y="277" width="5.5" height="15.0" fill="rgb(250,37,17)" rx="2" ry="2" />
+<text  x="1122.83" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.hashGen:278 (10,474 samples, 0.48%)</title><rect x="506.1" y="245" width="5.7" height="15.0" fill="rgb(243,148,28)" rx="2" ry="2" />
+<text  x="509.07" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigestImpl:382 (7,328 samples, 0.34%)</title><rect x="496.7" y="341" width="3.9" height="15.0" fill="rgb(211,103,52)" rx="2" ry="2" />
+<text  x="499.65" y="351.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:432 (4,714 samples, 0.22%)</title><rect x="1149.5" y="341" width="2.6" height="15.0" fill="rgb(227,99,37)" rx="2" ry="2" />
+<text  x="1152.52" y="351.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerValue.&lt;init&gt;:232 (12,034 samples, 0.56%)</title><rect x="1165.8" y="325" width="6.5" height="15.0" fill="rgb(248,220,14)" rx="2" ry="2" />
+<text  x="1168.75" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (11,000 samples, 0.51%)</title><rect x="571.7" y="261" width="6.0" height="15.0" fill="rgb(217,216,11)" rx="2" ry="2" />
+<text  x="574.71" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:64 (6,286 samples, 0.29%)</title><rect x="615.2" y="261" width="3.4" height="15.0" fill="rgb(229,224,24)" rx="2" ry="2" />
+<text  x="618.20" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$MutableElement.fixed:611 (32,970 samples, 1.52%)</title><rect x="687.4" y="245" width="18.0" height="15.0" fill="rgb(250,206,43)" rx="2" ry="2" />
+<text  x="690.41" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:238 (1,576 samples, 0.07%)</title><rect x="41.1" y="245" width="0.9" height="15.0" fill="rgb(234,119,23)" rx="2" ry="2" />
+<text  x="44.12" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:250 (6,800 samples, 0.31%)</title><rect x="1052.8" y="261" width="3.7" height="15.0" fill="rgb(232,64,42)" rx="2" ry="2" />
+<text  x="1055.77" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint$Mutable.&lt;init&gt;:103 (15,720 samples, 0.73%)</title><rect x="662.0" y="277" width="8.6" height="15.0" fill="rgb(227,144,6)" rx="2" ry="2" />
+<text  x="665.01" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.toAffinePoint:83 (241,308 samples, 11.14%)</title><rect x="364.9" y="261" width="131.5" height="15.0" fill="rgb(252,101,17)" rx="2" ry="2" />
+<text  x="367.93" y="271.5" >sun.security.ec...</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.encode:180 (8,916 samples, 0.41%)</title><rect x="526.9" y="245" width="4.9" height="15.0" fill="rgb(225,221,27)" rx="2" ry="2" />
+<text  x="529.90" y="255.5" ></text>
+</g>
+<g >
+<title>java.security.MessageDigest.digest:385 (4,186 samples, 0.19%)</title><rect x="511.8" y="245" width="2.3" height="15.0" fill="rgb(229,102,6)" rx="2" ry="2" />
+<text  x="514.77" y="255.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2355 (112,042 samples, 5.17%)</title><rect x="100.7" y="165" width="61.0" height="15.0" fill="rgb(254,66,35)" rx="2" ry="2" />
+<text  x="103.71" y="175.5" >java.m..</text>
+</g>
+<g >
+<title>java.security.Provider$ServiceKey.hashCode:1107 (1,570 samples, 0.07%)</title><rect x="14.0" y="197" width="0.9" height="15.0" fill="rgb(211,194,3)" rx="2" ry="2" />
+<text  x="17.00" y="207.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:491 (7,848 samples, 0.36%)</title><rect x="55.4" y="261" width="4.3" height="15.0" fill="rgb(236,41,6)" rx="2" ry="2" />
+<text  x="58.38" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:171 (3,152 samples, 0.15%)</title><rect x="1071.3" y="309" width="1.7" height="15.0" fill="rgb(209,153,30)" rx="2" ry="2" />
+<text  x="1074.32" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint$Mutable.&lt;init&gt;:102 (18,862 samples, 0.87%)</title><rect x="584.3" y="277" width="10.2" height="15.0" fill="rgb(242,227,29)" rx="2" ry="2" />
+<text  x="587.27" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature$SHA256.&lt;init&gt;:242 (55,038 samples, 2.54%)</title><rect x="12.9" y="341" width="29.9" height="15.0" fill="rgb(243,66,16)" rx="2" ry="2" />
+<text  x="15.85" y="351.5" >su..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValue:298 (231,876 samples, 10.70%)</title><rect x="370.1" y="165" width="126.3" height="15.0" fill="rgb(229,5,13)" rx="2" ry="2" />
+<text  x="373.06" y="175.5" >sun.security.ut..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:64 (4,726 samples, 0.22%)</title><rect x="659.4" y="261" width="2.6" height="15.0" fill="rgb(238,227,10)" rx="2" ry="2" />
+<text  x="662.44" y="271.5" ></text>
+</g>
+<g >
+<title>java.nio.ByteBuffer.wrap:394 (3,662 samples, 0.17%)</title><rect x="524.9" y="245" width="2.0" height="15.0" fill="rgb(233,199,26)" rx="2" ry="2" />
+<text  x="527.90" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (13,094 samples, 0.60%)</title><rect x="599.4" y="229" width="7.1" height="15.0" fill="rgb(212,228,43)" rx="2" ry="2" />
+<text  x="602.40" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.engineSign:475 (87,457 samples, 4.04%)</title><rect x="1141.2" y="373" width="47.7" height="15.0" fill="rgb(248,192,47)" rx="2" ry="2" />
+<text  x="1144.24" y="383.5" >sun...</text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint.mutable:60 (36,674 samples, 1.69%)</title><rect x="981.7" y="277" width="20.0" height="15.0" fill="rgb(242,73,45)" rx="2" ry="2" />
+<text  x="984.73" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2355 (106,348 samples, 4.91%)</title><rect x="271.9" y="101" width="57.9" height="15.0" fill="rgb(216,155,1)" rx="2" ry="2" />
+<text  x="274.89" y="111.5" >java.m..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:64 (24,620 samples, 1.14%)</title><rect x="1088.4" y="277" width="13.5" height="15.0" fill="rgb(253,83,21)" rx="2" ry="2" />
+<text  x="1091.44" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerValue.toByteArray:861 (5,256 samples, 0.24%)</title><rect x="1186.0" y="341" width="2.9" height="15.0" fill="rgb(244,127,9)" rx="2" ry="2" />
+<text  x="1189.01" y="351.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint$Mutable.&lt;init&gt;:102 (17,830 samples, 0.82%)</title><rect x="652.3" y="277" width="9.7" height="15.0" fill="rgb(205,189,25)" rx="2" ry="2" />
+<text  x="655.30" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (35,630 samples, 1.64%)</title><rect x="982.3" y="245" width="19.4" height="15.0" fill="rgb(222,127,45)" rx="2" ry="2" />
+<text  x="985.30" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.hashGen:259 (6,820 samples, 0.31%)</title><rect x="502.4" y="245" width="3.7" height="15.0" fill="rgb(217,169,48)" rx="2" ry="2" />
+<text  x="505.35" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (11,000 samples, 0.51%)</title><rect x="571.7" y="277" width="6.0" height="15.0" fill="rgb(234,190,29)" rx="2" ry="2" />
+<text  x="574.71" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (9,438 samples, 0.44%)</title><rect x="618.6" y="277" width="5.2" height="15.0" fill="rgb(206,159,24)" rx="2" ry="2" />
+<text  x="621.62" y="287.5" ></text>
+</g>
+<g >
+<title>java.nio.ByteBuffer.wrap:394 (1,052 samples, 0.05%)</title><rect x="1079.6" y="229" width="0.6" height="15.0" fill="rgb(234,111,47)" rx="2" ry="2" />
+<text  x="1082.60" y="239.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine$RequestHook.execute:70 (524 samples, 0.02%)</title><rect x="1189.3" y="565" width="0.3" height="15.0" fill="rgb(229,108,43)" rx="2" ry="2" />
+<text  x="1192.28" y="575.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.limbsToByteArray:453 (11,000 samples, 0.51%)</title><rect x="1059.0" y="277" width="6.0" height="15.0" fill="rgb(229,60,52)" rx="2" ry="2" />
+<text  x="1062.04" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:123 (1,087,528 samples, 50.20%)</title><rect x="548.9" y="325" width="592.3" height="15.0" fill="rgb(254,146,11)" rx="2" ry="2" />
+<text  x="551.88" y="335.5" >sun.security.ec.ECDSAOperations.signDigest:123</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:740 (237,638 samples, 10.97%)</title><rect x="366.9" y="213" width="129.5" height="15.0" fill="rgb(248,3,47)" rx="2" ry="2" />
+<text  x="369.93" y="223.5" >sun.security.uti..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.encode:236 (1,052 samples, 0.05%)</title><rect x="1079.6" y="245" width="0.6" height="15.0" fill="rgb(227,40,21)" rx="2" ry="2" />
+<text  x="1082.60" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.seedToScalar:185 (24,100 samples, 1.11%)</title><rect x="520.6" y="309" width="13.2" height="15.0" fill="rgb(253,185,14)" rx="2" ry="2" />
+<text  x="523.63" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:257 (27,792 samples, 1.28%)</title><rect x="1173.7" y="357" width="15.2" height="15.0" fill="rgb(237,206,8)" rx="2" ry="2" />
+<text  x="1176.73" y="367.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (7,862 samples, 0.36%)</title><rect x="1014.3" y="213" width="4.2" height="15.0" fill="rgb(240,44,50)" rx="2" ry="2" />
+<text  x="1017.26" y="223.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toByteArray:4119 (5,768 samples, 0.27%)</title><rect x="1156.4" y="325" width="3.1" height="15.0" fill="rgb(205,32,38)" rx="2" ry="2" />
+<text  x="1159.37" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:491 (10,992 samples, 0.51%)</title><rect x="226.0" y="197" width="5.9" height="15.0" fill="rgb(228,159,49)" rx="2" ry="2" />
+<text  x="228.95" y="207.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (7,862 samples, 0.36%)</title><rect x="1014.3" y="197" width="4.2" height="15.0" fill="rgb(227,43,33)" rx="2" ry="2" />
+<text  x="1017.26" y="207.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3410 (12,042 samples, 0.56%)</title><rect x="161.7" y="181" width="6.6" height="15.0" fill="rgb(250,63,7)" rx="2" ry="2" />
+<text  x="164.73" y="191.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:483 (1,046 samples, 0.05%)</title><rect x="47.7" y="309" width="0.5" height="15.0" fill="rgb(226,35,5)" rx="2" ry="2" />
+<text  x="50.68" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValuePositive:306 (63,921 samples, 2.95%)</title><rect x="461.5" y="149" width="34.9" height="15.0" fill="rgb(251,154,35)" rx="2" ry="2" />
+<text  x="464.55" y="159.5" >su..</text>
+</g>
+<g >
+<title>java.security.MessageDigest$Delegate.engineDigest:639 (6,820 samples, 0.31%)</title><rect x="502.4" y="197" width="3.7" height="15.0" fill="rgb(227,21,49)" rx="2" ry="2" />
+<text  x="505.35" y="207.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainder:2343 (177,989 samples, 8.22%)</title><rect x="64.8" y="181" width="96.9" height="15.0" fill="rgb(245,150,53)" rx="2" ry="2" />
+<text  x="67.79" y="191.5" >java.math.B..</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:187 (10,482 samples, 0.48%)</title><rect x="1125.3" y="309" width="5.7" height="15.0" fill="rgb(223,19,24)" rx="2" ry="2" />
+<text  x="1128.26" y="319.5" ></text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.toByteArray:211 (9,883 samples, 0.46%)</title><rect x="1160.4" y="341" width="5.4" height="15.0" fill="rgb(226,220,47)" rx="2" ry="2" />
+<text  x="1163.37" y="351.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint.asAffine:76 (57,603 samples, 2.66%)</title><rect x="1001.7" y="293" width="31.4" height="15.0" fill="rgb(207,224,48)" rx="2" ry="2" />
+<text  x="1004.70" y="303.5" >su..</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.lambda$forParameters$0:92 (499,618 samples, 23.06%)</title><rect x="224.5" y="293" width="272.2" height="15.0" fill="rgb(216,165,23)" rx="2" ry="2" />
+<text  x="227.52" y="303.5" >sun.security.ec.ECDSAOperations.lamb..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1191 (5,758 samples, 0.27%)</title><rect x="271.9" y="69" width="3.1" height="15.0" fill="rgb(214,176,39)" rx="2" ry="2" />
+<text  x="274.89" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.invoke.DirectMethodHandle$Holder.invokeStatic:-1 (524 samples, 0.02%)</title><rect x="1189.3" y="533" width="0.3" height="15.0" fill="rgb(207,154,24)" rx="2" ry="2" />
+<text  x="1192.28" y="543.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:4102 (1,046 samples, 0.05%)</title><rect x="101.6" y="101" width="0.5" height="15.0" fill="rgb(229,179,26)" rx="2" ry="2" />
+<text  x="104.57" y="111.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.FutureTask.run:264 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="613" width="1178.6" height="15.0" fill="rgb(252,102,54)" rx="2" ry="2" />
+<text  x="13.29" y="623.5" >java.util.concurrent.FutureTask.run:264</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:143 (6,286 samples, 0.29%)</title><rect x="615.2" y="245" width="3.4" height="15.0" fill="rgb(221,176,46)" rx="2" ry="2" />
+<text  x="618.20" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:254 (1,048 samples, 0.05%)</title><rect x="1101.3" y="261" width="0.6" height="15.0" fill="rgb(245,64,3)" rx="2" ry="2" />
+<text  x="1104.28" y="271.5" ></text>
+</g>
+<g >
+<title>org.sample.BenchmarkSigning.secp256r1_256B:59 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="437" width="1178.6" height="15.0" fill="rgb(238,161,54)" rx="2" ry="2" />
+<text  x="13.29" y="447.5" >org.sample.BenchmarkSigning.secp256r1_256B:59</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:492 (231,876 samples, 10.70%)</title><rect x="370.1" y="197" width="126.3" height="15.0" fill="rgb(250,180,21)" rx="2" ry="2" />
+<text  x="373.06" y="207.5" >sun.security.ut..</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:170 (22,546 samples, 1.04%)</title><rect x="1059.0" y="309" width="12.3" height="15.0" fill="rgb(220,228,49)" rx="2" ry="2" />
+<text  x="1062.04" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (13,094 samples, 0.60%)</title><rect x="599.4" y="213" width="7.1" height="15.0" fill="rgb(209,11,40)" rx="2" ry="2" />
+<text  x="602.40" y="223.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.FutureTask.run:264 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="581" width="1178.6" height="15.0" fill="rgb(221,67,54)" rx="2" ry="2" />
+<text  x="13.29" y="591.5" >java.util.concurrent.FutureTask.run:264</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.multiply:573 (8,906 samples, 0.41%)</title><rect x="1033.1" y="261" width="4.8" height="15.0" fill="rgb(210,91,47)" rx="2" ry="2" />
+<text  x="1036.08" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get1:64 (9,424 samples, 0.44%)</title><rect x="214.5" y="293" width="5.2" height="15.0" fill="rgb(227,44,18)" rx="2" ry="2" />
+<text  x="217.53" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:64 (12,046 samples, 0.56%)</title><rect x="548.9" y="277" width="6.5" height="15.0" fill="rgb(214,28,39)" rx="2" ry="2" />
+<text  x="551.88" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.forParameters:92 (8,908 samples, 0.41%)</title><rect x="219.7" y="325" width="4.8" height="15.0" fill="rgb(214,97,21)" rx="2" ry="2" />
+<text  x="222.67" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:64 (10,992 samples, 0.51%)</title><rect x="1082.5" y="277" width="5.9" height="15.0" fill="rgb(236,14,13)" rx="2" ry="2" />
+<text  x="1085.45" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (13,094 samples, 0.60%)</title><rect x="1018.5" y="245" width="7.2" height="15.0" fill="rgb(246,204,42)" rx="2" ry="2" />
+<text  x="1021.54" y="255.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine.doPeriodic:183 (1,279 samples, 0.06%)</title><rect x="1188.9" y="597" width="0.7" height="15.0" fill="rgb(228,137,52)" rx="2" ry="2" />
+<text  x="1191.87" y="607.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (7,856 samples, 0.36%)</title><rect x="215.4" y="245" width="4.3" height="15.0" fill="rgb(230,23,22)" rx="2" ry="2" />
+<text  x="218.39" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:257 (9,964 samples, 0.46%)</title><rect x="577.7" y="293" width="5.4" height="15.0" fill="rgb(243,211,47)" rx="2" ry="2" />
+<text  x="580.70" y="303.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3745 (10,474 samples, 0.48%)</title><rect x="506.1" y="229" width="5.7" height="15.0" fill="rgb(249,153,45)" rx="2" ry="2" />
+<text  x="509.07" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (11,536 samples, 0.53%)</title><rect x="208.3" y="261" width="6.2" height="15.0" fill="rgb(248,191,20)" rx="2" ry="2" />
+<text  x="211.25" y="271.5" ></text>
+</g>
+<g >
+<title>java.security.Provider.newInstanceUtil:153 (1,584 samples, 0.07%)</title><rect x="14.9" y="213" width="0.8" height="15.0" fill="rgb(208,191,2)" rx="2" ry="2" />
+<text  x="17.85" y="223.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2351 (42,974 samples, 1.98%)</title><rect x="64.8" y="165" width="23.4" height="15.0" fill="rgb(253,81,28)" rx="2" ry="2" />
+<text  x="67.79" y="175.5" >j..</text>
+</g>
+<g >
+<title>sun.security.provider.AbstractDrbg.engineNextBytes:334 (33,544 samples, 1.55%)</title><rect x="502.4" y="293" width="18.2" height="15.0" fill="rgb(219,139,29)" rx="2" ry="2" />
+<text  x="505.35" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.&lt;init&gt;:118 (55,038 samples, 2.54%)</title><rect x="12.9" y="309" width="29.9" height="15.0" fill="rgb(207,81,53)" rx="2" ry="2" />
+<text  x="15.85" y="319.5" >su..</text>
+</g>
+<g >
+<title>java.lang.invoke.Invokers$Holder.linkToTargetMethod:-1 (524 samples, 0.02%)</title><rect x="1189.3" y="549" width="0.3" height="15.0" fill="rgb(246,141,14)" rx="2" ry="2" />
+<text  x="1192.28" y="559.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.ThreadPoolExecutor$Worker.run:628 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="645" width="1178.6" height="15.0" fill="rgb(220,107,51)" rx="2" ry="2" />
+<text  x="13.29" y="655.5" >java.util.concurrent.ThreadPoolExecutor$Worker.run:628</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.finalReduce:362 (8,908 samples, 0.41%)</title><rect x="1136.4" y="261" width="4.8" height="15.0" fill="rgb(208,81,28)" rx="2" ry="2" />
+<text  x="1139.38" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValue:298 (244,150 samples, 11.27%)</title><rect x="231.9" y="165" width="133.0" height="15.0" fill="rgb(223,88,12)" rx="2" ry="2" />
+<text  x="234.94" y="175.5" >sun.security.uti..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.setValue:507 (231,876 samples, 10.70%)</title><rect x="370.1" y="181" width="126.3" height="15.0" fill="rgb(246,77,39)" rx="2" ry="2" />
+<text  x="373.06" y="191.5" >sun.security.ut..</text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:253 (5,768 samples, 0.27%)</title><rect x="1156.4" y="357" width="3.1" height="15.0" fill="rgb(244,142,7)" rx="2" ry="2" />
+<text  x="1159.37" y="367.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine.run_requests:230 (564 samples, 0.03%)</title><rect x="1189.3" y="581" width="0.3" height="15.0" fill="rgb(246,181,49)" rx="2" ry="2" />
+<text  x="1192.26" y="591.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:167 (14,160 samples, 0.65%)</title><rect x="1045.1" y="309" width="7.7" height="15.0" fill="rgb(249,18,7)" rx="2" ry="2" />
+<text  x="1048.06" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:252 (2,102 samples, 0.10%)</title><rect x="1155.2" y="357" width="1.2" height="15.0" fill="rgb(230,179,39)" rx="2" ry="2" />
+<text  x="1158.23" y="367.5" ></text>
+</g>
+<g >
+<title>java.security.Signature.sign:711 (2,094,100 samples, 96.66%)</title><rect x="48.2" y="405" width="1140.7" height="15.0" fill="rgb(222,6,16)" rx="2" ry="2" />
+<text  x="51.25" y="415.5" >java.security.Signature.sign:711</text>
+</g>
+<g >
+<title>java.lang.reflect.Constructor.copy:150 (1,584 samples, 0.07%)</title><rect x="14.9" y="149" width="0.8" height="15.0" fill="rgb(249,146,39)" rx="2" ry="2" />
+<text  x="17.85" y="159.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.DelegatingConstructorAccessorImpl.newInstance:45 (46,114 samples, 2.13%)</title><rect x="16.0" y="181" width="25.1" height="15.0" fill="rgb(239,126,33)" rx="2" ry="2" />
+<text  x="19.00" y="191.5" >j..</text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3410 (5,252 samples, 0.24%)</title><rect x="329.8" y="117" width="2.9" height="15.0" fill="rgb(209,115,37)" rx="2" ry="2" />
+<text  x="332.82" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.subtract:1516 (5,762 samples, 0.27%)</title><rect x="1101.9" y="277" width="3.1" height="15.0" fill="rgb(240,132,17)" rx="2" ry="2" />
+<text  x="1104.85" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:141 (1,046 samples, 0.05%)</title><rect x="101.6" y="117" width="0.5" height="15.0" fill="rgb(212,111,16)" rx="2" ry="2" />
+<text  x="104.57" y="127.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:4102 (1,570 samples, 0.07%)</title><rect x="404.0" y="37" width="0.9" height="15.0" fill="rgb(252,111,0)" rx="2" ry="2" />
+<text  x="407.03" y="47.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.valueOf:1176 (3,154 samples, 0.15%)</title><rect x="231.9" y="133" width="1.8" height="15.0" fill="rgb(221,24,1)" rx="2" ry="2" />
+<text  x="234.94" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:112 (20,424 samples, 0.94%)</title><rect x="299.9" y="53" width="11.1" height="15.0" fill="rgb(216,201,32)" rx="2" ry="2" />
+<text  x="302.85" y="63.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (9,964 samples, 0.46%)</title><rect x="577.7" y="261" width="5.4" height="15.0" fill="rgb(227,8,34)" rx="2" ry="2" />
+<text  x="580.70" y="271.5" ></text>
+</g>
+<g >
+<title>java.lang.Object.clone:-1 (522 samples, 0.02%)</title><rect x="675.4" y="229" width="0.3" height="15.0" fill="rgb(238,134,14)" rx="2" ry="2" />
+<text  x="678.42" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.forParameters:106 (47,678 samples, 2.20%)</title><rect x="193.7" y="325" width="26.0" height="15.0" fill="rgb(237,136,51)" rx="2" ry="2" />
+<text  x="196.70" y="335.5" >s..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$MutableElement.fixed:611 (9,956 samples, 0.46%)</title><rect x="1119.8" y="245" width="5.5" height="15.0" fill="rgb(211,226,38)" rx="2" ry="2" />
+<text  x="1122.83" y="255.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideOneWord:1100 (18,864 samples, 0.87%)</title><rect x="275.0" y="53" width="10.3" height="15.0" fill="rgb(213,176,1)" rx="2" ry="2" />
+<text  x="278.03" y="63.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:252 (16,762 samples, 0.77%)</title><rect x="1092.2" y="261" width="9.1" height="15.0" fill="rgb(248,3,49)" rx="2" ry="2" />
+<text  x="1095.15" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:64 (13,104 samples, 0.60%)</title><rect x="587.4" y="261" width="7.1" height="15.0" fill="rgb(233,83,15)" rx="2" ry="2" />
+<text  x="590.41" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:153 (241,308 samples, 11.14%)</title><rect x="364.9" y="229" width="131.5" height="15.0" fill="rgb(211,70,2)" rx="2" ry="2" />
+<text  x="367.93" y="239.5" >sun.security.uti..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (8,920 samples, 0.41%)</title><rect x="566.9" y="261" width="4.8" height="15.0" fill="rgb(241,82,38)" rx="2" ry="2" />
+<text  x="569.85" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (15,912 samples, 0.73%)</title><rect x="606.5" y="261" width="8.7" height="15.0" fill="rgb(208,6,47)" rx="2" ry="2" />
+<text  x="609.53" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:270 (37,682 samples, 1.74%)</title><rect x="684.8" y="293" width="20.6" height="15.0" fill="rgb(226,63,15)" rx="2" ry="2" />
+<text  x="687.84" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerValue.toByteArray:857 (530 samples, 0.02%)</title><rect x="1173.7" y="341" width="0.3" height="15.0" fill="rgb(210,97,29)" rx="2" ry="2" />
+<text  x="1176.73" y="351.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.multiply:485 (12,568 samples, 0.58%)</title><rect x="1033.1" y="277" width="6.8" height="15.0" fill="rgb(244,83,5)" rx="2" ry="2" />
+<text  x="1036.08" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.limbsToByteArray:453 (9,946 samples, 0.46%)</title><rect x="1131.0" y="277" width="5.4" height="15.0" fill="rgb(254,172,15)" rx="2" ry="2" />
+<text  x="1133.97" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (6,286 samples, 0.29%)</title><rect x="615.2" y="229" width="3.4" height="15.0" fill="rgb(216,199,44)" rx="2" ry="2" />
+<text  x="618.20" y="239.5" ></text>
+</g>
+<g >
+<title>java.security.MessageDigest.getInstance:178 (53,464 samples, 2.47%)</title><rect x="12.9" y="293" width="29.1" height="15.0" fill="rgb(254,85,46)" rx="2" ry="2" />
+<text  x="15.85" y="303.5" >ja..</text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRight:3375 (63,921 samples, 2.95%)</title><rect x="461.5" y="133" width="34.9" height="15.0" fill="rgb(254,52,33)" rx="2" ry="2" />
+<text  x="464.55" y="143.5" >ja..</text>
+</g>
+<g >
+<title>java.math.BigInteger.stripLeadingZeroBytes:4398 (4,714 samples, 0.22%)</title><rect x="1149.5" y="309" width="2.6" height="15.0" fill="rgb(205,57,52)" rx="2" ry="2" />
+<text  x="1152.52" y="319.5" ></text>
+</g>
+<g >
+<title>org.sample.jmh_generated.BenchmarkSigning_secp256r1_256B_jmhTest.secp256r1_256B_thrpt_jmhStub:119 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="453" width="1178.6" height="15.0" fill="rgb(246,181,21)" rx="2" ry="2" />
+<text  x="13.29" y="463.5" >org.sample.jmh_generated.BenchmarkSigning_secp256r1_256B_jmhTest.secp256r1_256B_thrpt_jmhStub:119</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$MutableElement.fixed:611 (484,850 samples, 22.38%)</title><rect x="717.6" y="245" width="264.1" height="15.0" fill="rgb(240,147,11)" rx="2" ry="2" />
+<text  x="720.64" y="255.5" >sun.security.util.math.intpoly.Inte..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (13,094 samples, 0.60%)</title><rect x="1018.5" y="229" width="7.2" height="15.0" fill="rgb(230,108,50)" rx="2" ry="2" />
+<text  x="1021.54" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:233 (1,570 samples, 0.07%)</title><rect x="519.8" y="261" width="0.8" height="15.0" fill="rgb(221,68,14)" rx="2" ry="2" />
+<text  x="522.77" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:64 (13,108 samples, 0.61%)</title><rect x="1073.0" y="277" width="7.2" height="15.0" fill="rgb(217,5,21)" rx="2" ry="2" />
+<text  x="1076.03" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:157 (3,668 samples, 0.17%)</title><rect x="12.9" y="261" width="2.0" height="15.0" fill="rgb(223,8,30)" rx="2" ry="2" />
+<text  x="15.85" y="271.5" ></text>
+</g>
+<g >
+<title>java.lang.Object.clone:-1 (524 samples, 0.02%)</title><rect x="981.4" y="229" width="0.3" height="15.0" fill="rgb(223,155,38)" rx="2" ry="2" />
+<text  x="984.44" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValuePositive:306 (58,682 samples, 2.71%)</title><rect x="161.7" y="213" width="32.0" height="15.0" fill="rgb(224,66,54)" rx="2" ry="2" />
+<text  x="164.73" y="223.5" >su..</text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:254 (10,478 samples, 0.48%)</title><rect x="561.1" y="293" width="5.8" height="15.0" fill="rgb(245,70,33)" rx="2" ry="2" />
+<text  x="564.15" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:64 (257,087 samples, 11.87%)</title><rect x="53.7" y="309" width="140.0" height="15.0" fill="rgb(245,33,53)" rx="2" ry="2" />
+<text  x="56.67" y="319.5" >sun.security.util..</text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3434 (25,696 samples, 1.19%)</title><rect x="179.7" y="181" width="14.0" height="15.0" fill="rgb(234,159,13)" rx="2" ry="2" />
+<text  x="182.70" y="191.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:253 (10,481 samples, 0.48%)</title><rect x="555.4" y="293" width="5.7" height="15.0" fill="rgb(236,158,52)" rx="2" ry="2" />
+<text  x="558.44" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (13,084 samples, 0.60%)</title><rect x="200.0" y="261" width="7.1" height="15.0" fill="rgb(249,148,34)" rx="2" ry="2" />
+<text  x="202.98" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.asByteArray:598 (18,854 samples, 0.87%)</title><rect x="1131.0" y="293" width="10.2" height="15.0" fill="rgb(240,107,48)" rx="2" ry="2" />
+<text  x="1133.97" y="303.5" ></text>
+</g>
+<g >
+<title>java.lang.reflect.Method.invoke:566 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="533" width="1178.6" height="15.0" fill="rgb(222,139,34)" rx="2" ry="2" />
+<text  x="13.29" y="543.5" >java.lang.reflect.Method.invoke:566</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get1:148 (12,048 samples, 0.56%)</title><rect x="1012.0" y="229" width="6.5" height="15.0" fill="rgb(247,39,5)" rx="2" ry="2" />
+<text  x="1014.98" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:492 (246,095 samples, 11.36%)</title><rect x="59.7" y="261" width="134.0" height="15.0" fill="rgb(225,212,16)" rx="2" ry="2" />
+<text  x="62.65" y="271.5" >sun.security.uti..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:143 (15,184 samples, 0.70%)</title><rect x="198.8" y="277" width="8.3" height="15.0" fill="rgb(236,10,43)" rx="2" ry="2" />
+<text  x="201.84" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2352 (19,888 samples, 0.92%)</title><rect x="392.3" y="101" width="10.9" height="15.0" fill="rgb(209,127,37)" rx="2" ry="2" />
+<text  x="395.34" y="111.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerOutputStream.&lt;init&gt;:66 (522 samples, 0.02%)</title><rect x="1173.7" y="325" width="0.3" height="15.0" fill="rgb(235,17,41)" rx="2" ry="2" />
+<text  x="1176.74" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.SHA2.&lt;init&gt;:83 (5,230 samples, 0.24%)</title><rect x="20.0" y="133" width="2.8" height="15.0" fill="rgb(238,122,14)" rx="2" ry="2" />
+<text  x="23.00" y="143.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (7,856 samples, 0.36%)</title><rect x="215.4" y="261" width="4.3" height="15.0" fill="rgb(242,90,39)" rx="2" ry="2" />
+<text  x="218.39" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:740 (255,142 samples, 11.78%)</title><rect x="226.0" y="213" width="138.9" height="15.0" fill="rgb(229,77,31)" rx="2" ry="2" />
+<text  x="228.95" y="223.5" >sun.security.util..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:112 (24,642 samples, 1.14%)</title><rect x="126.1" y="117" width="13.4" height="15.0" fill="rgb(239,9,48)" rx="2" ry="2" />
+<text  x="129.11" y="127.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.SunEC$ProviderService.newInstance:108 (59,752 samples, 2.76%)</title><rect x="10.3" y="357" width="32.5" height="15.0" fill="rgb(221,228,29)" rx="2" ry="2" />
+<text  x="13.29" y="367.5" >su..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:252 (3,134 samples, 0.14%)</title><rect x="1056.5" y="261" width="1.7" height="15.0" fill="rgb(223,129,47)" rx="2" ry="2" />
+<text  x="1059.47" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:399 (2,102 samples, 0.10%)</title><rect x="1146.1" y="325" width="1.1" height="15.0" fill="rgb(217,127,17)" rx="2" ry="2" />
+<text  x="1149.09" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.asByteArray:598 (22,546 samples, 1.04%)</title><rect x="1059.0" y="293" width="12.3" height="15.0" fill="rgb(230,139,10)" rx="2" ry="2" />
+<text  x="1062.04" y="303.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainder:2343 (163,749 samples, 7.56%)</title><rect x="372.4" y="117" width="89.1" height="15.0" fill="rgb(220,179,31)" rx="2" ry="2" />
+<text  x="375.36" y="127.5" >java.math...</text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:206 (69,698 samples, 3.22%)</title><rect x="10.3" y="389" width="37.9" height="15.0" fill="rgb(249,191,35)" rx="2" ry="2" />
+<text  x="13.29" y="399.5" >sun..</text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.grow:120 (8,384 samples, 0.39%)</title><rect x="1181.4" y="261" width="4.6" height="15.0" fill="rgb(245,5,14)" rx="2" ry="2" />
+<text  x="1184.44" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.seedToScalar:187 (4,720 samples, 0.22%)</title><rect x="533.8" y="309" width="2.5" height="15.0" fill="rgb(229,155,1)" rx="2" ry="2" />
+<text  x="536.75" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.engineSign:463 (9,946 samples, 0.46%)</title><rect x="48.2" y="373" width="5.5" height="15.0" fill="rgb(234,145,2)" rx="2" ry="2" />
+<text  x="51.25" y="383.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.&lt;init&gt;:123 (1,046 samples, 0.05%)</title><rect x="194.8" y="309" width="0.6" height="15.0" fill="rgb(219,4,1)" rx="2" ry="2" />
+<text  x="197.84" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:254 (1,570 samples, 0.07%)</title><rect x="1058.2" y="261" width="0.8" height="15.0" fill="rgb(209,217,5)" rx="2" ry="2" />
+<text  x="1061.18" y="271.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.ForkedRunner.run:72 (315 samples, 0.01%)</title><rect x="1189.6" y="645" width="0.1" height="15.0" fill="rgb(211,10,13)" rx="2" ry="2" />
+<text  x="1192.57" y="655.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:103 (18,338 samples, 0.85%)</title><rect x="382.4" y="85" width="9.9" height="15.0" fill="rgb(205,113,26)" rx="2" ry="2" />
+<text  x="385.35" y="95.5" ></text>
+</g>
+<g >
+<title>all (2,166,392 samples, 100%)</title><rect x="10.0" y="677" width="1180.0" height="15.0" fill="rgb(250,130,48)" rx="2" ry="2" />
+<text  x="13.00" y="687.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1192 (532 samples, 0.02%)</title><rect x="233.4" y="117" width="0.3" height="15.0" fill="rgb(249,224,15)" rx="2" ry="2" />
+<text  x="236.37" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:186 (34,588 samples, 1.60%)</title><rect x="311.0" y="85" width="18.8" height="15.0" fill="rgb(212,96,36)" rx="2" ry="2" />
+<text  x="313.98" y="95.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.&lt;init&gt;:129 (23,058 samples, 1.06%)</title><rect x="207.1" y="309" width="12.6" height="15.0" fill="rgb(224,148,46)" rx="2" ry="2" />
+<text  x="210.11" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.encode:238 (8,916 samples, 0.41%)</title><rect x="526.9" y="261" width="4.9" height="15.0" fill="rgb(234,88,49)" rx="2" ry="2" />
+<text  x="529.90" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (5,758 samples, 0.27%)</title><rect x="584.3" y="245" width="3.1" height="15.0" fill="rgb(228,103,18)" rx="2" ry="2" />
+<text  x="587.27" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:64 (256,200 samples, 11.83%)</title><rect x="225.4" y="245" width="139.5" height="15.0" fill="rgb(237,175,52)" rx="2" ry="2" />
+<text  x="228.38" y="255.5" >sun.security.util..</text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerModuloP.multiplicativeInverse:159 (42,972 samples, 1.98%)</title><rect x="1101.9" y="293" width="23.4" height="15.0" fill="rgb(249,178,44)" rx="2" ry="2" />
+<text  x="1104.85" y="303.5" >s..</text>
+</g>
+<g >
+<title>sun.security.util.DerOutputStream.putInteger:165 (2,102 samples, 0.10%)</title><rect x="1155.2" y="341" width="1.2" height="15.0" fill="rgb(237,11,7)" rx="2" ry="2" />
+<text  x="1158.23" y="351.5" ></text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:254 (1,568 samples, 0.07%)</title><rect x="1159.5" y="357" width="0.9" height="15.0" fill="rgb(222,49,28)" rx="2" ry="2" />
+<text  x="1162.52" y="367.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:141 (1,570 samples, 0.07%)</title><rect x="404.0" y="53" width="0.9" height="15.0" fill="rgb(214,89,51)" rx="2" ry="2" />
+<text  x="407.03" y="63.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.SHA2$SHA256.&lt;init&gt;:288 (38,768 samples, 1.79%)</title><rect x="20.0" y="149" width="21.1" height="15.0" fill="rgb(222,82,52)" rx="2" ry="2" />
+<text  x="23.00" y="159.5" ></text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.&lt;init&gt;:79 (4,208 samples, 0.19%)</title><rect x="1152.9" y="325" width="2.3" height="15.0" fill="rgb(254,178,26)" rx="2" ry="2" />
+<text  x="1155.94" y="335.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BaseRunner.doSingle:138 (315 samples, 0.01%)</title><rect x="1189.6" y="613" width="0.1" height="15.0" fill="rgb(249,71,22)" rx="2" ry="2" />
+<text  x="1192.57" y="623.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (4,726 samples, 0.22%)</title><rect x="659.4" y="213" width="2.6" height="15.0" fill="rgb(250,79,39)" rx="2" ry="2" />
+<text  x="662.44" y="223.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerFieldModuloP.getElement:95 (11,504 samples, 0.53%)</title><rect x="1052.8" y="293" width="6.2" height="15.0" fill="rgb(231,31,29)" rx="2" ry="2" />
+<text  x="1055.77" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (3,146 samples, 0.15%)</title><rect x="1113.3" y="229" width="1.7" height="15.0" fill="rgb(240,111,2)" rx="2" ry="2" />
+<text  x="1116.27" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (4,715 samples, 0.22%)</title><rect x="623.8" y="245" width="2.5" height="15.0" fill="rgb(205,79,19)" rx="2" ry="2" />
+<text  x="626.76" y="255.5" ></text>
+</g>
+<g >
+<title>java.security.Signature$Delegate.engineSign:1402 (2,094,100 samples, 96.66%)</title><rect x="48.2" y="389" width="1140.7" height="15.0" fill="rgb(233,125,50)" rx="2" ry="2" />
+<text  x="51.25" y="399.5" >java.security.Signature$Delegate.engineSign:1402</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:153 (257,087 samples, 11.87%)</title><rect x="53.7" y="293" width="140.0" height="15.0" fill="rgb(239,127,17)" rx="2" ry="2" />
+<text  x="56.67" y="303.5" >sun.security.util..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.limbsToByteArray:454 (15,706 samples, 0.72%)</title><rect x="539.2" y="277" width="8.5" height="15.0" fill="rgb(208,137,34)" rx="2" ry="2" />
+<text  x="542.18" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerFieldModuloP.getElement:95 (24,620 samples, 1.14%)</title><rect x="1088.4" y="293" width="13.5" height="15.0" fill="rgb(225,131,27)" rx="2" ry="2" />
+<text  x="1091.44" y="303.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:186 (40,754 samples, 1.88%)</title><rect x="139.5" y="149" width="22.2" height="15.0" fill="rgb(245,112,17)" rx="2" ry="2" />
+<text  x="142.54" y="159.5" >j..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.encode:236 (3,134 samples, 0.14%)</title><rect x="1056.5" y="245" width="1.7" height="15.0" fill="rgb(207,4,2)" rx="2" ry="2" />
+<text  x="1059.47" y="255.5" ></text>
+</g>
+<g >
+<title>java.lang.Thread.run:834 (2,165,077 samples, 99.94%)</title><rect x="10.3" y="661" width="1179.3" height="15.0" fill="rgb(232,4,3)" rx="2" ry="2" />
+<text  x="13.29" y="671.5" >java.lang.Thread.run:834</text>
+</g>
+<g >
+<title>java.security.Provider$Service.newInstance:1915 (48,220 samples, 2.23%)</title><rect x="14.9" y="229" width="26.2" height="15.0" fill="rgb(245,223,22)" rx="2" ry="2" />
+<text  x="17.85" y="239.5" >j..</text>
+</g>
+<g >
+<title>sun.security.util.DerOutputStream.&lt;init&gt;:61 (4,208 samples, 0.19%)</title><rect x="1152.9" y="341" width="2.3" height="15.0" fill="rgb(215,131,2)" rx="2" ry="2" />
+<text  x="1155.94" y="351.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:64 (13,634 samples, 0.63%)</title><rect x="207.1" y="293" width="7.4" height="15.0" fill="rgb(213,7,36)" rx="2" ry="2" />
+<text  x="210.11" y="303.5" ></text>
+</g>
+<g >
+<title>java.lang.Class.getConstructor:2150 (1,584 samples, 0.07%)</title><rect x="14.9" y="197" width="0.8" height="15.0" fill="rgb(207,40,54)" rx="2" ry="2" />
+<text  x="17.85" y="207.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2353 (522 samples, 0.02%)</title><rect x="271.6" y="101" width="0.3" height="15.0" fill="rgb(220,88,40)" rx="2" ry="2" />
+<text  x="274.61" y="111.5" ></text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.ensureCapacity:95 (8,384 samples, 0.39%)</title><rect x="1181.4" y="277" width="4.6" height="15.0" fill="rgb(209,6,10)" rx="2" ry="2" />
+<text  x="1184.44" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:252 (12,578 samples, 0.58%)</title><rect x="524.9" y="277" width="6.9" height="15.0" fill="rgb(244,98,33)" rx="2" ry="2" />
+<text  x="527.90" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3413 (19,393 samples, 0.90%)</title><rect x="332.7" y="117" width="10.5" height="15.0" fill="rgb(240,8,27)" rx="2" ry="2" />
+<text  x="335.68" y="127.5" ></text>
+</g>
+<g >
+<title>org.sample.DigitalSignature.sign:30 (2,094,100 samples, 96.66%)</title><rect x="48.2" y="421" width="1140.7" height="15.0" fill="rgb(227,63,0)" rx="2" ry="2" />
+<text  x="51.25" y="431.5" >org.sample.DigitalSignature.sign:30</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:64 (6,286 samples, 0.29%)</title><rect x="675.7" y="261" width="3.4" height="15.0" fill="rgb(231,160,44)" rx="2" ry="2" />
+<text  x="678.71" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get1:148 (4,198 samples, 0.19%)</title><rect x="1112.7" y="245" width="2.3" height="15.0" fill="rgb(218,61,46)" rx="2" ry="2" />
+<text  x="1115.70" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:262 (7,846 samples, 0.36%)</title><rect x="626.3" y="293" width="4.3" height="15.0" fill="rgb(231,11,3)" rx="2" ry="2" />
+<text  x="629.33" y="303.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.Executors$RunnableAdapter.call:515 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="597" width="1178.6" height="15.0" fill="rgb(248,106,16)" rx="2" ry="2" />
+<text  x="13.29" y="607.5" >java.util.concurrent.Executors$RunnableAdapter.call:515</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.limbsToByteArray:454 (11,546 samples, 0.53%)</title><rect x="1065.0" y="277" width="6.3" height="15.0" fill="rgb(248,169,24)" rx="2" ry="2" />
+<text  x="1068.03" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.subtract:1516 (3,668 samples, 0.17%)</title><rect x="219.7" y="309" width="2.0" height="15.0" fill="rgb(208,115,50)" rx="2" ry="2" />
+<text  x="222.67" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (11,532 samples, 0.53%)</title><rect x="1106.4" y="245" width="6.3" height="15.0" fill="rgb(250,130,45)" rx="2" ry="2" />
+<text  x="1109.41" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$MutableElement.fixed:602 (29,362 samples, 1.36%)</title><rect x="632.0" y="261" width="16.0" height="15.0" fill="rgb(245,44,48)" rx="2" ry="2" />
+<text  x="635.03" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.subtract:1518 (4,190 samples, 0.19%)</title><rect x="221.7" y="309" width="2.2" height="15.0" fill="rgb(212,70,19)" rx="2" ry="2" />
+<text  x="224.66" y="319.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1163 (70,501 samples, 3.25%)</title><rect x="403.2" y="85" width="38.4" height="15.0" fill="rgb(225,38,4)" rx="2" ry="2" />
+<text  x="406.17" y="95.5" >jav..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1207 (47,138 samples, 2.18%)</title><rect x="285.3" y="69" width="25.7" height="15.0" fill="rgb(226,13,49)" rx="2" ry="2" />
+<text  x="288.30" y="79.5" >j..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$MutableElement.fixed:611 (13,601 samples, 0.63%)</title><rect x="1025.7" y="229" width="7.4" height="15.0" fill="rgb(222,49,22)" rx="2" ry="2" />
+<text  x="1028.67" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (4,715 samples, 0.22%)</title><rect x="623.8" y="229" width="2.5" height="15.0" fill="rgb(245,27,39)" rx="2" ry="2" />
+<text  x="626.76" y="239.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.mod:2699 (163,749 samples, 7.56%)</title><rect x="372.4" y="133" width="89.1" height="15.0" fill="rgb(210,85,18)" rx="2" ry="2" />
+<text  x="375.36" y="143.5" >java.math...</text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1192 (3,668 samples, 0.17%)</title><rect x="517.8" y="229" width="2.0" height="15.0" fill="rgb(211,225,42)" rx="2" ry="2" />
+<text  x="520.77" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:250 (7,852 samples, 0.36%)</title><rect x="520.6" y="277" width="4.3" height="15.0" fill="rgb(254,172,20)" rx="2" ry="2" />
+<text  x="523.63" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1163 (71,288 samples, 3.29%)</title><rect x="100.7" y="149" width="38.8" height="15.0" fill="rgb(231,209,19)" rx="2" ry="2" />
+<text  x="103.71" y="159.5" >jav..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.finalReduce:362 (10,484 samples, 0.48%)</title><rect x="1047.1" y="261" width="5.7" height="15.0" fill="rgb(206,3,18)" rx="2" ry="2" />
+<text  x="1050.06" y="271.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BaseRunner.runBenchmarksForked:75 (315 samples, 0.01%)</title><rect x="1189.6" y="629" width="0.1" height="15.0" fill="rgb(251,180,43)" rx="2" ry="2" />
+<text  x="1192.57" y="639.5" ></text>
+</g>
+<g >
+<title>java.lang.reflect.ReflectAccess.copyConstructor:155 (1,584 samples, 0.07%)</title><rect x="14.9" y="165" width="0.8" height="15.0" fill="rgb(247,44,48)" rx="2" ry="2" />
+<text  x="17.85" y="175.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1207 (38,284 samples, 1.77%)</title><rect x="420.7" y="69" width="20.9" height="15.0" fill="rgb(209,177,17)" rx="2" ry="2" />
+<text  x="423.72" y="79.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.SHA2.&lt;init&gt;:86 (29,864 samples, 1.38%)</title><rect x="24.8" y="133" width="16.3" height="15.0" fill="rgb(224,117,3)" rx="2" ry="2" />
+<text  x="27.85" y="143.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.ReflectionFactory.copyConstructor:388 (1,584 samples, 0.07%)</title><rect x="14.9" y="181" width="0.8" height="15.0" fill="rgb(228,222,53)" rx="2" ry="2" />
+<text  x="17.85" y="191.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.&lt;init&gt;:106 (55,038 samples, 2.54%)</title><rect x="12.9" y="325" width="29.9" height="15.0" fill="rgb(211,118,33)" rx="2" ry="2" />
+<text  x="15.85" y="335.5" >su..</text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getService:85 (9,946 samples, 0.46%)</title><rect x="42.8" y="373" width="5.4" height="15.0" fill="rgb(227,22,36)" rx="2" ry="2" />
+<text  x="45.83" y="383.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.toAffinePoint:82 (256,200 samples, 11.83%)</title><rect x="225.4" y="261" width="139.5" height="15.0" fill="rgb(230,101,49)" rx="2" ry="2" />
+<text  x="228.38" y="271.5" >sun.security.ec.E..</text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:267 (57,118 samples, 2.64%)</title><rect x="648.0" y="293" width="31.1" height="15.0" fill="rgb(227,163,3)" rx="2" ry="2" />
+<text  x="651.02" y="303.5" >su..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get1:64 (4,715 samples, 0.22%)</title><rect x="623.8" y="277" width="2.5" height="15.0" fill="rgb(222,141,28)" rx="2" ry="2" />
+<text  x="626.76" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1191 (2,622 samples, 0.12%)</title><rect x="100.7" y="133" width="1.4" height="15.0" fill="rgb(236,163,10)" rx="2" ry="2" />
+<text  x="103.71" y="143.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerValue.encode:433 (8,384 samples, 0.39%)</title><rect x="1181.4" y="325" width="4.6" height="15.0" fill="rgb(218,159,3)" rx="2" ry="2" />
+<text  x="1184.44" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (13,104 samples, 0.60%)</title><rect x="587.4" y="213" width="7.1" height="15.0" fill="rgb(216,205,32)" rx="2" ry="2" />
+<text  x="590.41" y="223.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint.fixed:55 (31,976 samples, 1.48%)</title><rect x="630.6" y="277" width="17.4" height="15.0" fill="rgb(236,20,43)" rx="2" ry="2" />
+<text  x="633.60" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:190 (18,854 samples, 0.87%)</title><rect x="1131.0" y="309" width="10.2" height="15.0" fill="rgb(250,70,16)" rx="2" ry="2" />
+<text  x="1133.97" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:254 (3,670 samples, 0.17%)</title><rect x="531.8" y="277" width="2.0" height="15.0" fill="rgb(231,121,32)" rx="2" ry="2" />
+<text  x="534.75" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1192 (4,714 samples, 0.22%)</title><rect x="62.2" y="181" width="2.6" height="15.0" fill="rgb(215,178,45)" rx="2" ry="2" />
+<text  x="65.22" y="191.5" ></text>
+</g>
+<g >
+<title>java.lang.String.toUpperCase:2584 (3,664 samples, 0.17%)</title><rect x="46.3" y="325" width="1.9" height="15.0" fill="rgb(249,100,37)" rx="2" ry="2" />
+<text  x="49.25" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigestImpl:383 (3,140 samples, 0.14%)</title><rect x="500.6" y="341" width="1.8" height="15.0" fill="rgb(209,13,6)" rx="2" ry="2" />
+<text  x="503.64" y="351.5" ></text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:164 (49,796 samples, 2.30%)</title><rect x="14.9" y="261" width="27.1" height="15.0" fill="rgb(240,141,43)" rx="2" ry="2" />
+<text  x="17.85" y="271.5" >s..</text>
+</g>
+<g >
+<title>java.util.concurrent.CopyOnWriteArrayList.iterator:1024 (715 samples, 0.03%)</title><rect x="1188.9" y="565" width="0.4" height="15.0" fill="rgb(220,116,53)" rx="2" ry="2" />
+<text  x="1191.87" y="575.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1203 (20,444 samples, 0.94%)</title><rect x="102.1" y="133" width="11.2" height="15.0" fill="rgb(215,118,45)" rx="2" ry="2" />
+<text  x="105.14" y="143.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint$Mutable.&lt;init&gt;:104 (22,198 samples, 1.02%)</title><rect x="606.5" y="277" width="12.1" height="15.0" fill="rgb(239,172,16)" rx="2" ry="2" />
+<text  x="609.53" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1203 (29,067 samples, 1.34%)</title><rect x="404.9" y="69" width="15.8" height="15.0" fill="rgb(229,25,37)" rx="2" ry="2" />
+<text  x="407.89" y="79.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:181 (4,187 samples, 0.19%)</title><rect x="1080.2" y="309" width="2.3" height="15.0" fill="rgb(216,201,1)" rx="2" ry="2" />
+<text  x="1083.17" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get1:148 (9,424 samples, 0.44%)</title><rect x="214.5" y="277" width="5.2" height="15.0" fill="rgb(243,66,44)" rx="2" ry="2" />
+<text  x="217.53" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:186 (36,670 samples, 1.69%)</title><rect x="441.6" y="85" width="19.9" height="15.0" fill="rgb(225,154,16)" rx="2" ry="2" />
+<text  x="444.57" y="95.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (9,428 samples, 0.44%)</title><rect x="550.3" y="229" width="5.1" height="15.0" fill="rgb(246,65,8)" rx="2" ry="2" />
+<text  x="553.30" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerModuloP.pow:191 (15,730 samples, 0.73%)</title><rect x="1106.4" y="277" width="8.6" height="15.0" fill="rgb(248,197,50)" rx="2" ry="2" />
+<text  x="1109.41" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:103 (16,770 samples, 0.77%)</title><rect x="79.1" y="149" width="9.1" height="15.0" fill="rgb(213,46,11)" rx="2" ry="2" />
+<text  x="82.06" y="159.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.subtract:1530 (4,720 samples, 0.22%)</title><rect x="1001.7" y="245" width="2.6" height="15.0" fill="rgb(232,110,38)" rx="2" ry="2" />
+<text  x="1004.70" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint$Mutable.setValue:132 (10,482 samples, 0.48%)</title><rect x="679.1" y="277" width="5.7" height="15.0" fill="rgb(250,165,33)" rx="2" ry="2" />
+<text  x="682.13" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (9,430 samples, 0.44%)</title><rect x="670.6" y="261" width="5.1" height="15.0" fill="rgb(208,11,2)" rx="2" ry="2" />
+<text  x="673.57" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (8,910 samples, 0.41%)</title><rect x="594.5" y="245" width="4.9" height="15.0" fill="rgb(247,17,47)" rx="2" ry="2" />
+<text  x="597.55" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:251 (12,046 samples, 0.56%)</title><rect x="548.9" y="293" width="6.5" height="15.0" fill="rgb(214,126,41)" rx="2" ry="2" />
+<text  x="551.88" y="303.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.subtract:1530 (3,668 samples, 0.17%)</title><rect x="219.7" y="293" width="2.0" height="15.0" fill="rgb(213,121,19)" rx="2" ry="2" />
+<text  x="222.67" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:120 (49,774 samples, 2.30%)</title><rect x="520.6" y="325" width="27.1" height="15.0" fill="rgb(251,59,19)" rx="2" ry="2" />
+<text  x="523.63" y="335.5" >s..</text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.&lt;init&gt;:125 (2,098 samples, 0.10%)</title><rect x="196.8" y="309" width="1.2" height="15.0" fill="rgb(234,140,5)" rx="2" ry="2" />
+<text  x="199.84" y="319.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3745 (5,256 samples, 0.24%)</title><rect x="1186.0" y="309" width="2.9" height="15.0" fill="rgb(205,108,32)" rx="2" ry="2" />
+<text  x="1189.01" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (35,630 samples, 1.64%)</title><rect x="982.3" y="261" width="19.4" height="15.0" fill="rgb(205,202,18)" rx="2" ry="2" />
+<text  x="985.30" y="271.5" ></text>
+</g>
+<g >
+<title>java.security.Provider.newInstanceUtil:154 (46,636 samples, 2.15%)</title><rect x="15.7" y="213" width="25.4" height="15.0" fill="rgb(238,188,1)" rx="2" ry="2" />
+<text  x="18.71" y="223.5" >j..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (9,428 samples, 0.44%)</title><rect x="550.3" y="245" width="5.1" height="15.0" fill="rgb(227,91,34)" rx="2" ry="2" />
+<text  x="553.30" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.forParameters:105 (257,087 samples, 11.87%)</title><rect x="53.7" y="325" width="140.0" height="15.0" fill="rgb(235,201,1)" rx="2" ry="2" />
+<text  x="56.67" y="335.5" >sun.security.ec.E..</text>
+</g>
+<g >
+<title>java.math.BigInteger.subtract:1516 (4,720 samples, 0.22%)</title><rect x="1001.7" y="261" width="2.6" height="15.0" fill="rgb(246,31,3)" rx="2" ry="2" />
+<text  x="1004.70" y="271.5" ></text>
+</g>
+<g >
+<title>java.security.Provider.getService:1299 (9,944 samples, 0.46%)</title><rect x="42.8" y="357" width="5.4" height="15.0" fill="rgb(247,174,26)" rx="2" ry="2" />
+<text  x="45.83" y="367.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigestImpl:416 (813,291 samples, 37.54%)</title><rect x="53.7" y="357" width="443.0" height="15.0" fill="rgb(241,62,1)" rx="2" ry="2" />
+<text  x="56.67" y="367.5" >sun.security.ec.ECDSASignature.signDigestImpl:416</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (13,104 samples, 0.60%)</title><rect x="652.3" y="245" width="7.1" height="15.0" fill="rgb(253,161,29)" rx="2" ry="2" />
+<text  x="655.30" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.toAffinePoint:84 (532 samples, 0.02%)</title><rect x="496.4" y="261" width="0.3" height="15.0" fill="rgb(215,218,37)" rx="2" ry="2" />
+<text  x="499.36" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.&lt;init&gt;:128 (16,756 samples, 0.77%)</title><rect x="198.0" y="309" width="9.1" height="15.0" fill="rgb(221,100,1)" rx="2" ry="2" />
+<text  x="200.98" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerValue.toByteArray:859 (22,006 samples, 1.02%)</title><rect x="1174.0" y="341" width="12.0" height="15.0" fill="rgb(250,62,14)" rx="2" ry="2" />
+<text  x="1177.02" y="351.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getSmallValue:163 (2,098 samples, 0.10%)</title><rect x="196.8" y="293" width="1.2" height="15.0" fill="rgb(233,192,47)" rx="2" ry="2" />
+<text  x="199.84" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:143 (12,046 samples, 0.56%)</title><rect x="548.9" y="261" width="6.5" height="15.0" fill="rgb(232,133,33)" rx="2" ry="2" />
+<text  x="551.88" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:275 (507,378 samples, 23.42%)</title><rect x="705.4" y="293" width="276.3" height="15.0" fill="rgb(212,156,4)" rx="2" ry="2" />
+<text  x="708.37" y="303.5" >sun.security.ec.ECOperations.multiply..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (9,960 samples, 0.46%)</title><rect x="662.0" y="261" width="5.4" height="15.0" fill="rgb(228,42,48)" rx="2" ry="2" />
+<text  x="665.01" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:740 (253,943 samples, 11.72%)</title><rect x="55.4" y="277" width="138.3" height="15.0" fill="rgb(254,144,0)" rx="2" ry="2" />
+<text  x="58.38" y="287.5" >sun.security.util..</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:184 (10,992 samples, 0.51%)</title><rect x="1082.5" y="309" width="5.9" height="15.0" fill="rgb(212,25,32)" rx="2" ry="2" />
+<text  x="1085.45" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.finalReduce:362 (11,546 samples, 0.53%)</title><rect x="1065.0" y="261" width="6.3" height="15.0" fill="rgb(226,75,2)" rx="2" ry="2" />
+<text  x="1068.03" y="271.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.ConcurrentHashMap.get:936 (1,570 samples, 0.07%)</title><rect x="14.0" y="213" width="0.9" height="15.0" fill="rgb(225,145,24)" rx="2" ry="2" />
+<text  x="17.00" y="223.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:265 (31,976 samples, 1.48%)</title><rect x="630.6" y="293" width="17.4" height="15.0" fill="rgb(206,8,21)" rx="2" ry="2" />
+<text  x="633.60" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getSmallValue:163 (1,046 samples, 0.05%)</title><rect x="194.8" y="293" width="0.6" height="15.0" fill="rgb(233,146,16)" rx="2" ry="2" />
+<text  x="197.84" y="303.5" ></text>
+</g>
+<g >
+<title>java.security.Provider$ServiceKey.&lt;init&gt;:1103 (3,664 samples, 0.17%)</title><rect x="46.3" y="341" width="1.9" height="15.0" fill="rgb(210,75,24)" rx="2" ry="2" />
+<text  x="49.25" y="351.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:4102 (2,090 samples, 0.10%)</title><rect x="273.9" y="37" width="1.1" height="15.0" fill="rgb(221,109,53)" rx="2" ry="2" />
+<text  x="276.89" y="47.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (10,481 samples, 0.48%)</title><rect x="555.4" y="277" width="5.7" height="15.0" fill="rgb(233,193,31)" rx="2" ry="2" />
+<text  x="558.44" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValuePositive:303 (3,154 samples, 0.15%)</title><rect x="231.9" y="149" width="1.8" height="15.0" fill="rgb(232,213,25)" rx="2" ry="2" />
+<text  x="234.94" y="159.5" ></text>
+</g>
+<g >
+<title>java.security.Signature.getInstance:404 (69,698 samples, 3.22%)</title><rect x="10.3" y="405" width="37.9" height="15.0" fill="rgb(240,77,30)" rx="2" ry="2" />
+<text  x="13.29" y="415.5" >jav..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.multiply:575 (3,662 samples, 0.17%)</title><rect x="1037.9" y="261" width="2.0" height="15.0" fill="rgb(213,13,28)" rx="2" ry="2" />
+<text  x="1040.93" y="271.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.NativeMethodAccessorImpl.invoke0:-1 (2,163,798 samples, 99.88%)</title><rect x="10.3" y="485" width="1178.6" height="15.0" fill="rgb(253,5,26)" rx="2" ry="2" />
+<text  x="13.29" y="495.5" >jdk.internal.reflect.NativeMethodAccessorImpl.invoke0:-1</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigestImpl:393 (1,139,394 samples, 52.59%)</title><rect x="520.6" y="341" width="620.6" height="15.0" fill="rgb(221,198,19)" rx="2" ry="2" />
+<text  x="523.63" y="351.5" >sun.security.ec.ECDSASignature.signDigestImpl:393</text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder$$Lambda$89.1973932916.run:-1 (1,279 samples, 0.06%)</title><rect x="1188.9" y="645" width="0.7" height="15.0" fill="rgb(210,176,24)" rx="2" ry="2" />
+<text  x="1191.87" y="655.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1192 (2,622 samples, 0.12%)</title><rect x="370.9" y="117" width="1.5" height="15.0" fill="rgb(249,133,12)" rx="2" ry="2" />
+<text  x="373.93" y="127.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerFieldModuloP.getElement:95 (13,108 samples, 0.61%)</title><rect x="1073.0" y="293" width="7.2" height="15.0" fill="rgb(237,149,40)" rx="2" ry="2" />
+<text  x="1076.03" y="303.5" ></text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.write:156 (8,384 samples, 0.39%)</title><rect x="1181.4" y="293" width="4.6" height="15.0" fill="rgb(239,91,14)" rx="2" ry="2" />
+<text  x="1184.44" y="303.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:141 (2,090 samples, 0.10%)</title><rect x="273.9" y="53" width="1.1" height="15.0" fill="rgb(251,169,8)" rx="2" ry="2" />
+<text  x="276.89" y="63.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.forParameters:91 (499,618 samples, 23.06%)</title><rect x="224.5" y="341" width="272.2" height="15.0" fill="rgb(249,218,13)" rx="2" ry="2" />
+<text  x="227.52" y="351.5" >sun.security.ec.ECDSAOperations.forP..</text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:399 (4,714 samples, 0.22%)</title><rect x="1149.5" y="325" width="2.6" height="15.0" fill="rgb(241,122,26)" rx="2" ry="2" />
+<text  x="1152.52" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (10,482 samples, 0.48%)</title><rect x="679.1" y="229" width="5.7" height="15.0" fill="rgb(244,88,26)" rx="2" ry="2" />
+<text  x="682.13" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.DigestBase.engineDigest:187 (4,186 samples, 0.19%)</title><rect x="511.8" y="213" width="2.3" height="15.0" fill="rgb(254,98,54)" rx="2" ry="2" />
+<text  x="514.77" y="223.5" ></text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:247 (8,382 samples, 0.39%)</title><rect x="1142.7" y="357" width="4.5" height="15.0" fill="rgb(208,114,48)" rx="2" ry="2" />
+<text  x="1145.67" y="367.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerModuloP.pow:192 (8,908 samples, 0.41%)</title><rect x="1115.0" y="277" width="4.8" height="15.0" fill="rgb(247,40,48)" rx="2" ry="2" />
+<text  x="1117.98" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:278 (36,674 samples, 1.69%)</title><rect x="981.7" y="293" width="20.0" height="15.0" fill="rgb(239,81,52)" rx="2" ry="2" />
+<text  x="984.73" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:64 (11,504 samples, 0.53%)</title><rect x="1052.8" y="277" width="6.2" height="15.0" fill="rgb(253,76,51)" rx="2" ry="2" />
+<text  x="1055.77" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:250 (12,056 samples, 0.56%)</title><rect x="1073.0" y="261" width="6.6" height="15.0" fill="rgb(227,207,39)" rx="2" ry="2" />
+<text  x="1076.03" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.trustedStripLeadingZeroInts:4382 (4,190 samples, 0.19%)</title><rect x="221.7" y="293" width="2.2" height="15.0" fill="rgb(217,43,50)" rx="2" ry="2" />
+<text  x="224.66" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$ImmutableElement.&lt;init&gt;:744 (4,726 samples, 0.22%)</title><rect x="659.4" y="229" width="2.6" height="15.0" fill="rgb(219,78,34)" rx="2" ry="2" />
+<text  x="662.44" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (10,482 samples, 0.48%)</title><rect x="1125.3" y="277" width="5.7" height="15.0" fill="rgb(234,178,47)" rx="2" ry="2" />
+<text  x="1128.26" y="287.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine.run_requests:212 (715 samples, 0.03%)</title><rect x="1188.9" y="581" width="0.4" height="15.0" fill="rgb(211,211,47)" rx="2" ry="2" />
+<text  x="1191.87" y="591.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:112 (18,866 samples, 0.87%)</title><rect x="431.3" y="53" width="10.3" height="15.0" fill="rgb(226,197,40)" rx="2" ry="2" />
+<text  x="434.30" y="63.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerModuloP.pow:191 (24,614 samples, 1.14%)</title><rect x="1005.1" y="261" width="13.4" height="15.0" fill="rgb(233,217,2)" rx="2" ry="2" />
+<text  x="1008.13" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:122 (2,092 samples, 0.10%)</title><rect x="547.7" y="325" width="1.2" height="15.0" fill="rgb(233,69,34)" rx="2" ry="2" />
+<text  x="550.74" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:256 (11,000 samples, 0.51%)</title><rect x="571.7" y="293" width="6.0" height="15.0" fill="rgb(218,141,45)" rx="2" ry="2" />
+<text  x="574.71" y="303.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:386 (1,279 samples, 0.06%)</title><rect x="1188.9" y="629" width="0.7" height="15.0" fill="rgb(235,200,40)" rx="2" ry="2" />
+<text  x="1191.87" y="639.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:163 (831,356 samples, 38.38%)</title><rect x="548.9" y="309" width="452.8" height="15.0" fill="rgb(233,228,16)" rx="2" ry="2" />
+<text  x="551.88" y="319.5" >sun.security.ec.ECDSAOperations.signDigest:163</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (13,084 samples, 0.60%)</title><rect x="200.0" y="245" width="7.1" height="15.0" fill="rgb(252,18,54)" rx="2" ry="2" />
+<text  x="202.98" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.multiply:255 (8,920 samples, 0.41%)</title><rect x="566.9" y="293" width="4.8" height="15.0" fill="rgb(241,220,24)" rx="2" ry="2" />
+<text  x="569.85" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:231 (10,494 samples, 0.48%)</title><rect x="514.1" y="261" width="5.7" height="15.0" fill="rgb(235,132,48)" rx="2" ry="2" />
+<text  x="517.05" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.setValue:507 (244,150 samples, 11.27%)</title><rect x="231.9" y="181" width="133.0" height="15.0" fill="rgb(218,205,41)" rx="2" ry="2" />
+<text  x="234.94" y="191.5" >sun.security.uti..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValuePositive:303 (9,424 samples, 0.44%)</title><rect x="59.7" y="213" width="5.1" height="15.0" fill="rgb(252,116,14)" rx="2" ry="2" />
+<text  x="62.65" y="223.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toByteArray:4119 (2,102 samples, 0.10%)</title><rect x="1155.2" y="325" width="1.2" height="15.0" fill="rgb(224,197,2)" rx="2" ry="2" />
+<text  x="1158.23" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$MutableElement.fixed:602 (13,601 samples, 0.63%)</title><rect x="1025.7" y="245" width="7.4" height="15.0" fill="rgb(252,174,48)" rx="2" ry="2" />
+<text  x="1028.67" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.limbsToByteArray:454 (10,484 samples, 0.48%)</title><rect x="1047.1" y="277" width="5.7" height="15.0" fill="rgb(222,119,45)" rx="2" ry="2" />
+<text  x="1050.06" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:250 (5,236 samples, 0.24%)</title><rect x="1082.5" y="261" width="2.8" height="15.0" fill="rgb(229,199,25)" rx="2" ry="2" />
+<text  x="1085.45" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (12,566 samples, 0.58%)</title><rect x="1005.1" y="229" width="6.9" height="15.0" fill="rgb(219,229,37)" rx="2" ry="2" />
+<text  x="1008.13" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:143 (13,104 samples, 0.60%)</title><rect x="587.4" y="245" width="7.1" height="15.0" fill="rgb(228,89,49)" rx="2" ry="2" />
+<text  x="590.41" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (5,758 samples, 0.27%)</title><rect x="584.3" y="261" width="3.1" height="15.0" fill="rgb(234,73,36)" rx="2" ry="2" />
+<text  x="587.27" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:143 (5,760 samples, 0.27%)</title><rect x="667.4" y="245" width="3.2" height="15.0" fill="rgb(235,126,39)" rx="2" ry="2" />
+<text  x="670.43" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$MutableElement.fixed:611 (29,362 samples, 1.36%)</title><rect x="632.0" y="245" width="16.0" height="15.0" fill="rgb(244,44,42)" rx="2" ry="2" />
+<text  x="635.03" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:186 (42,972 samples, 1.98%)</title><rect x="1101.9" y="309" width="23.4" height="15.0" fill="rgb(249,137,8)" rx="2" ry="2" />
+<text  x="1104.85" y="319.5" >s..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:143 (13,634 samples, 0.63%)</title><rect x="207.1" y="277" width="7.4" height="15.0" fill="rgb(231,121,47)" rx="2" ry="2" />
+<text  x="210.11" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValuePositive:305 (176,537 samples, 8.15%)</title><rect x="233.7" y="149" width="96.1" height="15.0" fill="rgb(243,67,3)" rx="2" ry="2" />
+<text  x="236.66" y="159.5" >sun.securit..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:492 (244,150 samples, 11.27%)</title><rect x="231.9" y="197" width="133.0" height="15.0" fill="rgb(244,24,13)" rx="2" ry="2" />
+<text  x="234.94" y="207.5" >sun.security.uti..</text>
+</g>
+<g >
+<title>sun.security.util.DerValue.encode:426 (13,622 samples, 0.63%)</title><rect x="1174.0" y="325" width="7.4" height="15.0" fill="rgb(214,152,53)" rx="2" ry="2" />
+<text  x="1177.02" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (3,146 samples, 0.15%)</title><rect x="1113.3" y="213" width="1.7" height="15.0" fill="rgb(231,39,15)" rx="2" ry="2" />
+<text  x="1116.27" y="223.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3434 (39,814 samples, 1.84%)</title><rect x="343.2" y="117" width="21.7" height="15.0" fill="rgb(242,164,6)" rx="2" ry="2" />
+<text  x="346.24" y="127.5" >j..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get1:64 (10,482 samples, 0.48%)</title><rect x="679.1" y="261" width="5.7" height="15.0" fill="rgb(221,41,39)" rx="2" ry="2" />
+<text  x="682.13" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.SHA2.&lt;init&gt;:85 (3,674 samples, 0.17%)</title><rect x="22.8" y="133" width="2.0" height="15.0" fill="rgb(236,68,31)" rx="2" ry="2" />
+<text  x="25.85" y="143.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (10,482 samples, 0.48%)</title><rect x="679.1" y="213" width="5.7" height="15.0" fill="rgb(229,80,24)" rx="2" ry="2" />
+<text  x="682.13" y="223.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.encode:236 (16,762 samples, 0.77%)</title><rect x="1092.2" y="245" width="9.1" height="15.0" fill="rgb(210,28,16)" rx="2" ry="2" />
+<text  x="1095.15" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:491 (5,762 samples, 0.27%)</title><rect x="366.9" y="197" width="3.2" height="15.0" fill="rgb(212,141,16)" rx="2" ry="2" />
+<text  x="369.93" y="207.5" ></text>
+</g>
+<g >
+<title>java.security.MessageDigest$Delegate.engineDigest:639 (4,186 samples, 0.19%)</title><rect x="511.8" y="229" width="2.3" height="15.0" fill="rgb(223,90,41)" rx="2" ry="2" />
+<text  x="514.77" y="239.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.valueOf:1176 (4,206 samples, 0.19%)</title><rect x="370.1" y="133" width="2.3" height="15.0" fill="rgb(243,95,52)" rx="2" ry="2" />
+<text  x="373.06" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2351 (36,690 samples, 1.69%)</title><rect x="372.4" y="101" width="19.9" height="15.0" fill="rgb(218,86,53)" rx="2" ry="2" />
+<text  x="375.36" y="111.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:4102 (4,190 samples, 0.19%)</title><rect x="221.7" y="277" width="2.2" height="15.0" fill="rgb(226,128,29)" rx="2" ry="2" />
+<text  x="224.66" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECPrivateKeyImpl.getArrayS:163 (3,140 samples, 0.14%)</title><rect x="500.6" y="325" width="1.8" height="15.0" fill="rgb(212,194,12)" rx="2" ry="2" />
+<text  x="503.64" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations.signDigest:166 (9,424 samples, 0.44%)</title><rect x="1039.9" y="309" width="5.2" height="15.0" fill="rgb(213,103,39)" rx="2" ry="2" />
+<text  x="1042.92" y="319.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BaseRunner.runBenchmark:233 (315 samples, 0.01%)</title><rect x="1189.6" y="597" width="0.1" height="15.0" fill="rgb(250,165,31)" rx="2" ry="2" />
+<text  x="1192.57" y="607.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine$RequestHook$$Lambda$100.872076893.get$Lambda:-1 (524 samples, 0.02%)</title><rect x="1189.3" y="517" width="0.3" height="15.0" fill="rgb(217,61,42)" rx="2" ry="2" />
+<text  x="1192.28" y="527.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (5,760 samples, 0.27%)</title><rect x="667.4" y="213" width="3.2" height="15.0" fill="rgb(241,228,37)" rx="2" ry="2" />
+<text  x="670.43" y="223.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get0:143 (4,726 samples, 0.22%)</title><rect x="659.4" y="245" width="2.6" height="15.0" fill="rgb(218,171,48)" rx="2" ry="2" />
+<text  x="662.44" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:252 (5,756 samples, 0.27%)</title><rect x="1085.3" y="261" width="3.1" height="15.0" fill="rgb(215,78,3)" rx="2" ry="2" />
+<text  x="1088.31" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$MutableElement.fixed:602 (32,970 samples, 1.52%)</title><rect x="687.4" y="261" width="18.0" height="15.0" fill="rgb(221,132,34)" rx="2" ry="2" />
+<text  x="690.41" y="271.5" ></text>
+</g>
+<g >
+<title>org.sample.DigitalSignature.sign:26 (69,698 samples, 3.22%)</title><rect x="10.3" y="421" width="37.9" height="15.0" fill="rgb(232,89,26)" rx="2" ry="2" />
+<text  x="13.29" y="431.5" >org..</text>
+</g>
+<g >
+<title>sun.security.provider.AbstractDrbg.engineNextBytes:394 (33,544 samples, 1.55%)</title><rect x="502.4" y="277" width="18.2" height="15.0" fill="rgb(241,122,35)" rx="2" ry="2" />
+<text  x="505.35" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECOperations.seedToScalar:188 (20,954 samples, 0.97%)</title><rect x="536.3" y="309" width="11.4" height="15.0" fill="rgb(229,163,28)" rx="2" ry="2" />
+<text  x="539.32" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.finalReduce:362 (15,706 samples, 0.72%)</title><rect x="539.2" y="261" width="8.5" height="15.0" fill="rgb(242,28,4)" rx="2" ry="2" />
+<text  x="542.18" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSAOperations$$Lambda$39.442499866.apply:-1 (499,618 samples, 23.06%)</title><rect x="224.5" y="309" width="272.2" height="15.0" fill="rgb(212,35,32)" rx="2" ry="2" />
+<text  x="227.52" y="319.5" >sun.security.ec.ECDSAOperations$$Lam..</text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.&lt;init&gt;:79 (522 samples, 0.02%)</title><rect x="1173.7" y="293" width="0.3" height="15.0" fill="rgb(247,174,49)" rx="2" ry="2" />
+<text  x="1176.74" y="303.5" ></text>
+</g>
+<g >
+<title>java.security.Provider.getService:1303 (1,570 samples, 0.07%)</title><rect x="14.0" y="229" width="0.9" height="15.0" fill="rgb(212,11,38)" rx="2" ry="2" />
+<text  x="17.00" y="239.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3745 (9,883 samples, 0.46%)</title><rect x="1160.4" y="325" width="5.4" height="15.0" fill="rgb(220,50,13)" rx="2" ry="2" />
+<text  x="1163.37" y="335.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2355 (107,171 samples, 4.95%)</title><rect x="403.2" y="101" width="58.3" height="15.0" fill="rgb(219,197,50)" rx="2" ry="2" />
+<text  x="406.17" y="111.5" >java.m..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1207 (48,222 samples, 2.23%)</title><rect x="113.3" y="133" width="26.2" height="15.0" fill="rgb(250,73,44)" rx="2" ry="2" />
+<text  x="116.27" y="143.5" >j..</text>
+</g>
+<g >
+<title>sun.security.util.math.IntegerFieldModuloP.getElement:95 (10,992 samples, 0.51%)</title><rect x="1082.5" y="293" width="5.9" height="15.0" fill="rgb(229,147,38)" rx="2" ry="2" />
+<text  x="1085.45" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (9,964 samples, 0.46%)</title><rect x="577.7" y="277" width="5.4" height="15.0" fill="rgb(243,214,1)" rx="2" ry="2" />
+<text  x="580.70" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3410 (7,856 samples, 0.36%)</title><rect x="461.5" y="117" width="4.3" height="15.0" fill="rgb(237,68,26)" rx="2" ry="2" />
+<text  x="464.55" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2352 (22,973 samples, 1.06%)</title><rect x="88.2" y="165" width="12.5" height="15.0" fill="rgb(229,79,40)" rx="2" ry="2" />
+<text  x="91.19" y="175.5" ></text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:236 (48,220 samples, 2.23%)</title><rect x="14.9" y="245" width="26.2" height="15.0" fill="rgb(225,28,16)" rx="2" ry="2" />
+<text  x="17.85" y="255.5" >s..</text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.periodicTask:439 (1,279 samples, 0.06%)</title><rect x="1188.9" y="613" width="0.7" height="15.0" fill="rgb(235,92,18)" rx="2" ry="2" />
+<text  x="1191.87" y="623.5" ></text>
+</g>
+<g >
+<title>java.security.MessageDigest.digest:431 (6,820 samples, 0.31%)</title><rect x="502.4" y="229" width="3.7" height="15.0" fill="rgb(216,154,4)" rx="2" ry="2" />
+<text  x="505.35" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.limbsToByteArray:454 (8,908 samples, 0.41%)</title><rect x="1136.4" y="277" width="4.8" height="15.0" fill="rgb(211,105,9)" rx="2" ry="2" />
+<text  x="1139.38" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$MutableElement.fixed:602 (484,850 samples, 22.38%)</title><rect x="717.6" y="261" width="264.1" height="15.0" fill="rgb(209,71,42)" rx="2" ry="2" />
+<text  x="720.64" y="271.5" >sun.security.util.math.intpoly.Inte..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (10,481 samples, 0.48%)</title><rect x="555.4" y="261" width="5.7" height="15.0" fill="rgb(230,22,2)" rx="2" ry="2" />
+<text  x="558.44" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3434 (35,109 samples, 1.62%)</title><rect x="477.2" y="117" width="19.2" height="15.0" fill="rgb(229,206,18)" rx="2" ry="2" />
+<text  x="480.24" y="127.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.&lt;init&gt;:496 (11,536 samples, 0.53%)</title><rect x="208.3" y="245" width="6.2" height="15.0" fill="rgb(247,120,46)" rx="2" ry="2" />
+<text  x="211.25" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (10,482 samples, 0.48%)</title><rect x="1125.3" y="293" width="5.7" height="15.0" fill="rgb(207,98,37)" rx="2" ry="2" />
+<text  x="1128.26" y="303.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideOneWord:1100 (20,444 samples, 0.94%)</title><rect x="102.1" y="117" width="11.2" height="15.0" fill="rgb(228,82,36)" rx="2" ry="2" />
+<text  x="105.14" y="127.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3745 (8,384 samples, 0.39%)</title><rect x="1181.4" y="245" width="4.6" height="15.0" fill="rgb(213,18,51)" rx="2" ry="2" />
+<text  x="1184.44" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:523 (9,960 samples, 0.46%)</title><rect x="662.0" y="245" width="5.4" height="15.0" fill="rgb(224,137,44)" rx="2" ry="2" />
+<text  x="665.01" y="255.5" ></text>
+</g>
+<g >
+<title>java.security.Security.getImpl:700 (53,464 samples, 2.47%)</title><rect x="12.9" y="277" width="29.1" height="15.0" fill="rgb(219,193,14)" rx="2" ry="2" />
+<text  x="15.85" y="287.5" >ja..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.getElement:64 (24,100 samples, 1.11%)</title><rect x="520.6" y="293" width="13.2" height="15.0" fill="rgb(246,133,7)" rx="2" ry="2" />
+<text  x="523.63" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.point.ProjectivePoint.asAffine:77 (12,568 samples, 0.58%)</title><rect x="1033.1" y="293" width="6.8" height="15.0" fill="rgb(209,85,14)" rx="2" ry="2" />
+<text  x="1036.08" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get1:148 (4,715 samples, 0.22%)</title><rect x="623.8" y="261" width="2.5" height="15.0" fill="rgb(207,182,11)" rx="2" ry="2" />
+<text  x="626.76" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.setLimbsValuePositive:306 (64,459 samples, 2.98%)</title><rect x="329.8" y="149" width="35.1" height="15.0" fill="rgb(242,32,18)" rx="2" ry="2" />
+<text  x="332.82" y="159.5" >su..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.setValue:507 (246,095 samples, 11.36%)</title><rect x="59.7" y="245" width="134.0" height="15.0" fill="rgb(246,131,10)" rx="2" ry="2" />
+<text  x="62.65" y="255.5" >sun.security.uti..</text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial$Element.mutable:485 (11,532 samples, 0.53%)</title><rect x="1106.4" y="261" width="6.3" height="15.0" fill="rgb(235,59,30)" rx="2" ry="2" />
+<text  x="1109.41" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:249 (8,906 samples, 0.41%)</title><rect x="1147.2" y="357" width="4.9" height="15.0" fill="rgb(205,69,14)" rx="2" ry="2" />
+<text  x="1150.23" y="367.5" ></text>
+</g>
+<g >
+<title>sun.security.util.math.intpoly.IntegerPolynomial.get1:148 (10,482 samples, 0.48%)</title><rect x="679.1" y="245" width="5.7" height="15.0" fill="rgb(235,223,2)" rx="2" ry="2" />
+<text  x="682.13" y="255.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1191 (3,150 samples, 0.15%)</title><rect x="403.2" y="69" width="1.7" height="15.0" fill="rgb(228,76,19)" rx="2" ry="2" />
+<text  x="406.17" y="79.5" ></text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.&lt;init&gt;:64 (522 samples, 0.02%)</title><rect x="1173.7" y="309" width="0.3" height="15.0" fill="rgb(211,87,21)" rx="2" ry="2" />
+<text  x="1176.74" y="319.5" ></text>
+</g>
+<g >
+<title>java.security.MessageDigest.digest:385 (9,946 samples, 0.46%)</title><rect x="48.2" y="341" width="5.5" height="15.0" fill="rgb(244,191,29)" rx="2" ry="2" />
+<text  x="51.25" y="351.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3413 (20,956 samples, 0.97%)</title><rect x="465.8" y="117" width="11.4" height="15.0" fill="rgb(237,225,23)" rx="2" ry="2" />
+<text  x="468.83" y="127.5" ></text>
+</g>
+</g>
+</svg>

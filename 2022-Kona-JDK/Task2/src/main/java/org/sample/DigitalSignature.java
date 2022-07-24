@@ -4,19 +4,16 @@ import java.security.*;
 import java.security.spec.*;
 
 public class DigitalSignature {
-    KeyPairGenerator g;
-    ECGenParameterSpec ecsp;
-    KeyPair kp;
     PrivateKey privKey;
     PublicKey pubKey;
     byte[] sig;
 
     public DigitalSignature(String curve) throws Exception {
         // Create a public and private key for specified curve name.
-        g = KeyPairGenerator.getInstance("EC", "SunEC");
-        ecsp = new ECGenParameterSpec(curve);
+        KeyPairGenerator g = KeyPairGenerator.getInstance("EC", "SunEC");
+        ECGenParameterSpec ecsp = new ECGenParameterSpec(curve);
         g.initialize(ecsp);
-        kp = g.genKeyPair();
+        KeyPair kp = g.genKeyPair();
         privKey = kp.getPrivate();
         pubKey = kp.getPublic();
     }

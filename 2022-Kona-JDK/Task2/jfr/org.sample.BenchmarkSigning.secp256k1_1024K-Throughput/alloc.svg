@@ -1,0 +1,1104 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="646" onload="init(evt)" viewBox="0 0 1200 646" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom();
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				clearzoom();
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x = txt.length - 2; x > 0; x--) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom() {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="646.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >alloc secp256k1_1024K-Throughput</text>
+<text id="details" x="10.00" y="629" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="629" > </text>
+<g id="frames">
+<g >
+<title>all (46,480 samples, 100%)</title><rect x="10.0" y="597" width="1180.0" height="15.0" fill="rgb(213,132,16)" rx="2" ry="2" />
+<text  x="13.00" y="607.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BaseRunner.doSingle:138 (524 samples, 1.13%)</title><rect x="1167.3" y="533" width="13.3" height="15.0" fill="rgb(230,211,30)" rx="2" ry="2" />
+<text  x="1170.30" y="543.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.ThreadPoolExecutor$Worker.run:628 (45,060 samples, 96.94%)</title><rect x="23.3" y="565" width="1144.0" height="15.0" fill="rgb(250,158,33)" rx="2" ry="2" />
+<text  x="26.30" y="575.5" >java.util.concurrent.ThreadPoolExecutor$Worker.run:628</text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.writeSerialData:1510 (522 samples, 1.12%)</title><rect x="1167.4" y="373" width="13.2" height="15.0" fill="rgb(206,128,14)" rx="2" ry="2" />
+<text  x="1170.35" y="383.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:233 (1,044 samples, 2.25%)</title><rect x="741.3" y="165" width="26.5" height="15.0" fill="rgb(248,21,4)" rx="2" ry="2" />
+<text  x="744.25" y="175.5" >s..</text>
+</g>
+<g >
+<title>jdk.internal.reflect.DelegatingConstructorAccessorImpl.newInstance:45 (8,392 samples, 18.06%)</title><rect x="156.0" y="101" width="213.0" height="15.0" fill="rgb(249,79,3)" rx="2" ry="2" />
+<text  x="158.98" y="111.5" >jdk.internal.reflect.Delegat..</text>
+</g>
+<g >
+<title>java.security.Signature$Delegate.engineSign:1402 (29,354 samples, 63.15%)</title><rect x="422.0" y="309" width="745.3" height="15.0" fill="rgb(232,4,24)" rx="2" ry="2" />
+<text  x="425.04" y="319.5" >java.security.Signature$Delegate.engineSign:1402</text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream$HandleTable.growEntries:2353 (522 samples, 1.12%)</title><rect x="1167.4" y="197" width="13.2" height="15.0" fill="rgb(248,183,19)" rx="2" ry="2" />
+<text  x="1170.35" y="207.5" ></text>
+</g>
+<g >
+<title>java.security.Security.getImpl:700 (14,662 samples, 31.54%)</title><rect x="23.3" y="197" width="372.2" height="15.0" fill="rgb(233,137,12)" rx="2" ry="2" />
+<text  x="26.30" y="207.5" >java.security.Security.getImpl:700</text>
+</g>
+<g >
+<title>sun.security.ec.SunEC$ProviderService.newInstance:108 (14,662 samples, 31.54%)</title><rect x="23.3" y="277" width="372.2" height="15.0" fill="rgb(217,117,35)" rx="2" ry="2" />
+<text  x="26.30" y="287.5" >sun.security.ec.SunEC$ProviderService.newInstance:..</text>
+</g>
+<g >
+<title>java.io.OutputStream.write:122 (6 samples, 0.01%)</title><rect x="1153.7" y="229" width="0.1" height="15.0" fill="rgb(223,134,1)" rx="2" ry="2" />
+<text  x="1156.70" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeECParameterSpec:141 (2,622 samples, 5.64%)</title><rect x="448.7" y="261" width="66.6" height="15.0" fill="rgb(228,201,43)" rx="2" ry="2" />
+<text  x="451.74" y="271.5" >sun.sec..</text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BaseRunner.runBenchmark:282 (522 samples, 1.12%)</title><rect x="1167.4" y="501" width="13.2" height="15.0" fill="rgb(216,209,13)" rx="2" ry="2" />
+<text  x="1170.35" y="511.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.ForkedRunner.run:72 (524 samples, 1.13%)</title><rect x="1167.3" y="565" width="13.3" height="15.0" fill="rgb(233,209,41)" rx="2" ry="2" />
+<text  x="1170.30" y="575.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerValue.&lt;init&gt;:232 (3,144 samples, 6.76%)</title><rect x="1034.0" y="245" width="79.8" height="15.0" fill="rgb(246,226,51)" rx="2" ry="2" />
+<text  x="1036.97" y="255.5" >sun.secur..</text>
+</g>
+<g >
+<title>java.lang.reflect.Constructor.newInstance:490 (8,392 samples, 18.06%)</title><rect x="156.0" y="117" width="213.0" height="15.0" fill="rgb(253,145,1)" rx="2" ry="2" />
+<text  x="158.98" y="127.5" >java.lang.reflect.Constructo..</text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:157 (2,616 samples, 5.63%)</title><rect x="23.3" y="181" width="66.4" height="15.0" fill="rgb(245,61,50)" rx="2" ry="2" />
+<text  x="26.30" y="191.5" >sun.sec..</text>
+</g>
+<g >
+<title>java.lang.Thread.run:834 (45,062 samples, 96.95%)</title><rect x="23.3" y="581" width="1144.0" height="15.0" fill="rgb(217,158,15)" rx="2" ry="2" />
+<text  x="26.30" y="591.5" >java.lang.Thread.run:834</text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3745 (528 samples, 1.14%)</title><rect x="1153.8" y="229" width="13.5" height="15.0" fill="rgb(230,217,53)" rx="2" ry="2" />
+<text  x="1156.85" y="239.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:231 (2,090 samples, 4.50%)</title><rect x="688.2" y="165" width="53.1" height="15.0" fill="rgb(252,16,38)" rx="2" ry="2" />
+<text  x="691.20" y="175.5" >sun.s..</text>
+</g>
+<g >
+<title>java.util.concurrent.FutureTask.run:264 (45,060 samples, 96.94%)</title><rect x="23.3" y="533" width="1144.0" height="15.0" fill="rgb(210,129,36)" rx="2" ry="2" />
+<text  x="26.30" y="543.5" >java.util.concurrent.FutureTask.run:264</text>
+</g>
+<g >
+<title>sun.security.provider.SHA2$SHA256.&lt;init&gt;:288 (7,866 samples, 16.92%)</title><rect x="169.3" y="69" width="199.7" height="15.0" fill="rgb(228,6,45)" rx="2" ry="2" />
+<text  x="172.33" y="79.5" >sun.security.provider.SHA2..</text>
+</g>
+<g >
+<title>java.security.Provider.getService:1299 (4 samples, 0.01%)</title><rect x="448.7" y="165" width="0.1" height="15.0" fill="rgb(235,135,31)" rx="2" ry="2" />
+<text  x="451.74" y="175.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.link.BinaryLinkClient.access$000:52 (522 samples, 1.12%)</title><rect x="1167.4" y="453" width="13.2" height="15.0" fill="rgb(232,130,51)" rx="2" ry="2" />
+<text  x="1170.35" y="463.5" ></text>
+</g>
+<g >
+<title>java.lang.reflect.Constructor.copy:150 (2,088 samples, 4.49%)</title><rect x="89.7" y="69" width="53.0" height="15.0" fill="rgb(233,196,20)" rx="2" ry="2" />
+<text  x="92.72" y="79.5" >java...</text>
+</g>
+<g >
+<title>sun.security.provider.DigestBase.engineDigest:187 (522 samples, 1.12%)</title><rect x="674.9" y="117" width="13.3" height="15.0" fill="rgb(208,53,16)" rx="2" ry="2" />
+<text  x="677.94" y="127.5" ></text>
+</g>
+<g >
+<title>com.sun.proxy.$Proxy0.iterationResult:-1 (522 samples, 1.12%)</title><rect x="1167.4" y="485" width="13.2" height="15.0" fill="rgb(237,183,50)" rx="2" ry="2" />
+<text  x="1170.35" y="495.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:224 (522 samples, 1.12%)</title><rect x="674.9" y="165" width="13.3" height="15.0" fill="rgb(214,13,2)" rx="2" ry="2" />
+<text  x="677.94" y="175.5" ></text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.getECParameters:133 (2,622 samples, 5.64%)</title><rect x="448.7" y="245" width="66.6" height="15.0" fill="rgb(227,90,29)" rx="2" ry="2" />
+<text  x="451.74" y="255.5" >sun.sec..</text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.link.BinaryLinkClient$1.invoke:88 (522 samples, 1.12%)</title><rect x="1167.4" y="469" width="13.2" height="15.0" fill="rgb(227,133,45)" rx="2" ry="2" />
+<text  x="1170.35" y="479.5" ></text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:236 (11,002 samples, 23.67%)</title><rect x="89.7" y="165" width="279.3" height="15.0" fill="rgb(213,217,29)" rx="2" ry="2" />
+<text  x="92.72" y="175.5" >sun.security.jca.GetInstance.getInsta..</text>
+</g>
+<g >
+<title>sun.security.provider.AbstractDrbg.engineNextBytes:394 (3,658 samples, 7.87%)</title><rect x="674.9" y="181" width="92.9" height="15.0" fill="rgb(213,119,30)" rx="2" ry="2" />
+<text  x="677.89" y="191.5" >sun.securit..</text>
+</g>
+<g >
+<title>java.security.MessageDigest$Delegate.engineDigest:639 (2,096 samples, 4.51%)</title><rect x="528.7" y="133" width="53.2" height="15.0" fill="rgb(231,219,29)" rx="2" ry="2" />
+<text  x="531.66" y="143.5" >java...</text>
+</g>
+<g >
+<title>java.lang.reflect.ReflectAccess.copyConstructor:155 (2,088 samples, 4.49%)</title><rect x="89.7" y="85" width="53.0" height="15.0" fill="rgb(230,218,18)" rx="2" ry="2" />
+<text  x="92.72" y="95.5" >java...</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigestNative:442 (4,184 samples, 9.00%)</title><rect x="661.5" y="277" width="106.3" height="15.0" fill="rgb(238,9,14)" rx="2" ry="2" />
+<text  x="664.54" y="287.5" >sun.security...</text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3745 (1,570 samples, 3.38%)</title><rect x="994.1" y="245" width="39.9" height="15.0" fill="rgb(254,39,7)" rx="2" ry="2" />
+<text  x="997.11" y="255.5" >jav..</text>
+</g>
+<g >
+<title>java.security.MessageDigest$Delegate.engineDigest:639 (522 samples, 1.12%)</title><rect x="674.9" y="133" width="13.3" height="15.0" fill="rgb(237,221,24)" rx="2" ry="2" />
+<text  x="677.94" y="143.5" ></text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.writeOrdinaryObject:1433 (522 samples, 1.12%)</title><rect x="1167.4" y="389" width="13.2" height="15.0" fill="rgb(223,132,52)" rx="2" ry="2" />
+<text  x="1170.35" y="399.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.ConcurrentHashMap.get:936 (522 samples, 1.12%)</title><rect x="408.8" y="261" width="13.2" height="15.0" fill="rgb(251,81,52)" rx="2" ry="2" />
+<text  x="411.78" y="271.5" ></text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.&lt;init&gt;:79 (1,058 samples, 2.28%)</title><rect x="953.9" y="245" width="26.9" height="15.0" fill="rgb(252,22,16)" rx="2" ry="2" />
+<text  x="956.95" y="255.5" >j..</text>
+</g>
+<g >
+<title>sun.security.jca.ProviderList.getService:380 (2,622 samples, 5.64%)</title><rect x="448.7" y="181" width="66.6" height="15.0" fill="rgb(240,150,35)" rx="2" ry="2" />
+<text  x="451.74" y="191.5" >sun.sec..</text>
+</g>
+<g >
+<title>java.math.BigInteger.toByteArray:4119 (524 samples, 1.13%)</title><rect x="980.8" y="245" width="13.3" height="15.0" fill="rgb(232,16,45)" rx="2" ry="2" />
+<text  x="983.81" y="255.5" ></text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.toByteArray:211 (1,570 samples, 3.38%)</title><rect x="994.1" y="261" width="39.9" height="15.0" fill="rgb(237,178,10)" rx="2" ry="2" />
+<text  x="997.11" y="271.5" >jav..</text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.ForkedMain.main:86 (524 samples, 1.13%)</title><rect x="1167.3" y="581" width="13.3" height="15.0" fill="rgb(213,85,15)" rx="2" ry="2" />
+<text  x="1170.30" y="591.5" ></text>
+</g>
+<g >
+<title>org.sample.DigitalSignature.sign:26 (15,706 samples, 33.79%)</title><rect x="23.3" y="341" width="398.7" height="15.0" fill="rgb(247,137,19)" rx="2" ry="2" />
+<text  x="26.30" y="351.5" >org.sample.DigitalSignature.sign:26</text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:219 (2,620 samples, 5.64%)</title><rect x="528.7" y="197" width="66.5" height="15.0" fill="rgb(245,108,34)" rx="2" ry="2" />
+<text  x="531.66" y="207.5" >sun.sec..</text>
+</g>
+<g >
+<title>java.security.Provider.getService:1303 (522 samples, 1.12%)</title><rect x="408.8" y="277" width="13.2" height="15.0" fill="rgb(216,7,5)" rx="2" ry="2" />
+<text  x="411.78" y="287.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:475 (45,060 samples, 96.94%)</title><rect x="23.3" y="469" width="1144.0" height="15.0" fill="rgb(210,84,36)" rx="2" ry="2" />
+<text  x="26.30" y="479.5" >org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:475</text>
+</g>
+<g >
+<title>org.sample.DigitalSignature.sign:30 (29,354 samples, 63.15%)</title><rect x="422.0" y="341" width="745.3" height="15.0" fill="rgb(205,206,34)" rx="2" ry="2" />
+<text  x="425.04" y="351.5" >org.sample.DigitalSignature.sign:30</text>
+</g>
+<g >
+<title>java.security.SecureRandom.next:805 (526 samples, 1.13%)</title><rect x="661.5" y="245" width="13.4" height="15.0" fill="rgb(254,153,23)" rx="2" ry="2" />
+<text  x="664.54" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.DRBG.engineNextBytes:233 (5,234 samples, 11.26%)</title><rect x="528.7" y="245" width="132.8" height="15.0" fill="rgb(231,196,15)" rx="2" ry="2" />
+<text  x="531.66" y="255.5" >sun.security.pro..</text>
+</g>
+<g >
+<title>sun.security.util.DerOutputStream.putInteger:165 (524 samples, 1.13%)</title><rect x="980.8" y="261" width="13.3" height="15.0" fill="rgb(246,12,15)" rx="2" ry="2" />
+<text  x="983.81" y="271.5" ></text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.writeOrdinaryObject:1429 (522 samples, 1.12%)</title><rect x="1167.4" y="229" width="13.2" height="15.0" fill="rgb(236,156,54)" rx="2" ry="2" />
+<text  x="1170.35" y="239.5" ></text>
+</g>
+<g >
+<title>java.security.Provider$ServiceKey.hashCode:1107 (522 samples, 1.12%)</title><rect x="76.5" y="117" width="13.2" height="15.0" fill="rgb(220,121,37)" rx="2" ry="2" />
+<text  x="79.46" y="127.5" ></text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.defaultWriteFields:1553 (522 samples, 1.12%)</title><rect x="1167.4" y="357" width="13.2" height="15.0" fill="rgb(246,216,29)" rx="2" ry="2" />
+<text  x="1170.35" y="367.5" ></text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:236 (14,662 samples, 31.54%)</title><rect x="23.3" y="293" width="372.2" height="15.0" fill="rgb(252,7,23)" rx="2" ry="2" />
+<text  x="26.30" y="303.5" >sun.security.jca.GetInstance.getInstance:236</text>
+</g>
+<g >
+<title>java.security.SecureRandom.nextBytes:751 (3,658 samples, 7.87%)</title><rect x="674.9" y="229" width="92.9" height="15.0" fill="rgb(214,156,52)" rx="2" ry="2" />
+<text  x="677.89" y="239.5" >java.securi..</text>
+</g>
+<g >
+<title>java.security.MessageDigest$Delegate.engineDigest:639 (1,050 samples, 2.26%)</title><rect x="422.0" y="245" width="26.7" height="15.0" fill="rgb(246,192,11)" rx="2" ry="2" />
+<text  x="425.04" y="255.5" >j..</text>
+</g>
+<g >
+<title>sun.security.util.DerValue.encode:433 (6 samples, 0.01%)</title><rect x="1153.7" y="245" width="0.1" height="15.0" fill="rgb(238,217,48)" rx="2" ry="2" />
+<text  x="1156.70" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:233 (522 samples, 1.12%)</title><rect x="648.3" y="197" width="13.2" height="15.0" fill="rgb(216,202,30)" rx="2" ry="2" />
+<text  x="651.29" y="207.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:432 (1,048 samples, 2.25%)</title><rect x="834.2" y="261" width="26.6" height="15.0" fill="rgb(207,69,2)" rx="2" ry="2" />
+<text  x="837.17" y="271.5" >j..</text>
+</g>
+<g >
+<title>java.util.concurrent.ConcurrentHashMap.get:936 (2,618 samples, 5.63%)</title><rect x="448.8" y="149" width="66.5" height="15.0" fill="rgb(222,206,11)" rx="2" ry="2" />
+<text  x="451.84" y="159.5" >java.ut..</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigestNative:433 (2,622 samples, 5.64%)</title><rect x="448.7" y="277" width="66.6" height="15.0" fill="rgb(226,103,36)" rx="2" ry="2" />
+<text  x="451.74" y="287.5" >sun.sec..</text>
+</g>
+<g >
+<title>jdk.internal.reflect.NativeMethodAccessorImpl.invoke0:-1 (45,060 samples, 96.94%)</title><rect x="23.3" y="405" width="1144.0" height="15.0" fill="rgb(206,213,45)" rx="2" ry="2" />
+<text  x="26.30" y="415.5" >jdk.internal.reflect.NativeMethodAccessorImpl.invoke0:-1</text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:399 (1,048 samples, 2.25%)</title><rect x="834.2" y="245" width="26.6" height="15.0" fill="rgb(218,101,39)" rx="2" ry="2" />
+<text  x="837.17" y="255.5" >j..</text>
+</g>
+<g >
+<title>org.sample.BenchmarkSigning.secp256k1_1024K:84 (45,060 samples, 96.94%)</title><rect x="23.3" y="357" width="1144.0" height="15.0" fill="rgb(217,101,32)" rx="2" ry="2" />
+<text  x="26.30" y="367.5" >org.sample.BenchmarkSigning.secp256k1_1024K:84</text>
+</g>
+<g >
+<title>java.security.Provider$ServiceKey.hashCode:1107 (2,618 samples, 5.63%)</title><rect x="448.8" y="133" width="66.5" height="15.0" fill="rgb(214,149,30)" rx="2" ry="2" />
+<text  x="451.84" y="143.5" >java.se..</text>
+</g>
+<g >
+<title>jdk.internal.reflect.GeneratedConstructorAccessor1.newInstance:-1 (8,392 samples, 18.06%)</title><rect x="156.0" y="85" width="213.0" height="15.0" fill="rgb(244,71,44)" rx="2" ry="2" />
+<text  x="158.98" y="95.5" >jdk.internal.reflect.Generat..</text>
+</g>
+<g >
+<title>org.sample.jmh_generated.BenchmarkSigning_secp256k1_1024K_jmhTest.secp256k1_1024K_thrpt_jmhStub:119 (45,060 samples, 96.94%)</title><rect x="23.3" y="373" width="1144.0" height="15.0" fill="rgb(222,31,12)" rx="2" ry="2" />
+<text  x="26.30" y="383.5" >org.sample.jmh_generated.BenchmarkSigning_secp256k1_1024K_jmhTest.secp256k1_1024K_thrpt_jmhStub:119</text>
+</g>
+<g >
+<title>java.security.Provider$Service.newInstance:1915 (11,002 samples, 23.67%)</title><rect x="89.7" y="149" width="279.3" height="15.0" fill="rgb(211,180,22)" rx="2" ry="2" />
+<text  x="92.72" y="159.5" >java.security.Provider$Service.newIns..</text>
+</g>
+<g >
+<title>java.math.BigInteger.valueOf:1176 (1,566 samples, 3.37%)</title><rect x="701.5" y="149" width="39.8" height="15.0" fill="rgb(229,118,49)" rx="2" ry="2" />
+<text  x="704.50" y="159.5" >jav..</text>
+</g>
+<g >
+<title>sun.security.provider.AbstractDrbg.engineNextBytes:394 (5,234 samples, 11.26%)</title><rect x="528.7" y="213" width="132.8" height="15.0" fill="rgb(223,88,43)" rx="2" ry="2" />
+<text  x="531.66" y="223.5" >sun.security.pro..</text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:249 (3,670 samples, 7.90%)</title><rect x="860.8" y="277" width="93.1" height="15.0" fill="rgb(206,58,47)" rx="2" ry="2" />
+<text  x="863.78" y="287.5" >sun.securit..</text>
+</g>
+<g >
+<title>java.security.MessageDigest$Delegate.engineDigest:639 (1,044 samples, 2.25%)</title><rect x="595.2" y="165" width="26.5" height="15.0" fill="rgb(252,229,6)" rx="2" ry="2" />
+<text  x="598.18" y="175.5" >j..</text>
+</g>
+<g >
+<title>sun.security.provider.DigestBase.engineDigest:187 (1,050 samples, 2.26%)</title><rect x="422.0" y="229" width="26.7" height="15.0" fill="rgb(244,49,8)" rx="2" ry="2" />
+<text  x="425.04" y="239.5" >s..</text>
+</g>
+<g >
+<title>java.security.SecureRandom.next:808 (3,658 samples, 7.87%)</title><rect x="674.9" y="245" width="92.9" height="15.0" fill="rgb(227,99,25)" rx="2" ry="2" />
+<text  x="677.89" y="255.5" >java.securi..</text>
+</g>
+<g >
+<title>java.util.Random.nextInt:329 (4,184 samples, 9.00%)</title><rect x="661.5" y="261" width="106.3" height="15.0" fill="rgb(231,83,17)" rx="2" ry="2" />
+<text  x="664.54" y="271.5" >java.util.Ran..</text>
+</g>
+<g >
+<title>java.lang.reflect.Method.invoke:566 (45,060 samples, 96.94%)</title><rect x="23.3" y="453" width="1144.0" height="15.0" fill="rgb(220,22,39)" rx="2" ry="2" />
+<text  x="26.30" y="463.5" >java.lang.reflect.Method.invoke:566</text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.link.BinaryLinkClient.pushFrame:128 (522 samples, 1.12%)</title><rect x="1167.4" y="437" width="13.2" height="15.0" fill="rgb(212,223,41)" rx="2" ry="2" />
+<text  x="1170.35" y="447.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.&lt;init&gt;:106 (14,662 samples, 31.54%)</title><rect x="23.3" y="245" width="372.2" height="15.0" fill="rgb(217,183,49)" rx="2" ry="2" />
+<text  x="26.30" y="255.5" >sun.security.ec.ECDSASignature.&lt;init&gt;:106</text>
+</g>
+<g >
+<title>java.security.Security.getImpl:700 (2,622 samples, 5.64%)</title><rect x="448.7" y="213" width="66.6" height="15.0" fill="rgb(238,79,28)" rx="2" ry="2" />
+<text  x="451.74" y="223.5" >java.se..</text>
+</g>
+<g >
+<title>java.security.MessageDigest.getInstance:178 (14,662 samples, 31.54%)</title><rect x="23.3" y="213" width="372.2" height="15.0" fill="rgb(227,114,54)" rx="2" ry="2" />
+<text  x="26.30" y="223.5" >java.security.MessageDigest.getInstance:178</text>
+</g>
+<g >
+<title>java.security.MessageDigest.digest:385 (1,044 samples, 2.25%)</title><rect x="595.2" y="181" width="26.5" height="15.0" fill="rgb(238,138,25)" rx="2" ry="2" />
+<text  x="598.18" y="191.5" >j..</text>
+</g>
+<g >
+<title>java.security.MessageDigest.digest:431 (2,096 samples, 4.51%)</title><rect x="528.7" y="165" width="53.2" height="15.0" fill="rgb(238,166,15)" rx="2" ry="2" />
+<text  x="531.66" y="175.5" >java...</text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.writeArray:1379 (522 samples, 1.12%)</title><rect x="1167.4" y="325" width="13.2" height="15.0" fill="rgb(250,68,38)" rx="2" ry="2" />
+<text  x="1170.35" y="335.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke:43 (45,060 samples, 96.94%)</title><rect x="23.3" y="437" width="1144.0" height="15.0" fill="rgb(205,169,50)" rx="2" ry="2" />
+<text  x="26.30" y="447.5" >jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke:43</text>
+</g>
+<g >
+<title>java.security.Provider.getService:1299 (2,094 samples, 4.51%)</title><rect x="23.3" y="149" width="53.2" height="15.0" fill="rgb(223,132,36)" rx="2" ry="2" />
+<text  x="26.30" y="159.5" >java...</text>
+</g>
+<g >
+<title>sun.security.provider.DigestBase.&lt;init&gt;:86 (1,570 samples, 3.38%)</title><rect x="169.3" y="37" width="39.9" height="15.0" fill="rgb(216,165,2)" rx="2" ry="2" />
+<text  x="172.33" y="47.5" >sun..</text>
+</g>
+<g >
+<title>jdk.internal.reflect.NativeMethodAccessorImpl.invoke:62 (45,060 samples, 96.94%)</title><rect x="23.3" y="421" width="1144.0" height="15.0" fill="rgb(243,56,45)" rx="2" ry="2" />
+<text  x="26.30" y="431.5" >jdk.internal.reflect.NativeMethodAccessorImpl.invoke:62</text>
+</g>
+<g >
+<title>sun.security.provider.DigestBase.engineDigest:187 (2,096 samples, 4.51%)</title><rect x="528.7" y="117" width="53.2" height="15.0" fill="rgb(220,219,33)" rx="2" ry="2" />
+<text  x="531.66" y="127.5" >sun.s..</text>
+</g>
+<g >
+<title>java.security.SecureRandom.nextBytes:751 (5,234 samples, 11.26%)</title><rect x="528.7" y="261" width="132.8" height="15.0" fill="rgb(243,116,2)" rx="2" ry="2" />
+<text  x="531.66" y="271.5" >java.security.Se..</text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:255 (5,238 samples, 11.27%)</title><rect x="994.1" y="277" width="133.0" height="15.0" fill="rgb(209,198,23)" rx="2" ry="2" />
+<text  x="997.11" y="287.5" >sun.security.uti..</text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BaseRunner.runBenchmarksForked:75 (524 samples, 1.13%)</title><rect x="1167.3" y="549" width="13.3" height="15.0" fill="rgb(225,149,20)" rx="2" ry="2" />
+<text  x="1170.30" y="559.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigestNative:437 (526 samples, 1.13%)</title><rect x="515.3" y="277" width="13.4" height="15.0" fill="rgb(219,1,17)" rx="2" ry="2" />
+<text  x="518.31" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.DigestBase.engineDigest:187 (1,044 samples, 2.25%)</title><rect x="595.2" y="149" width="26.5" height="15.0" fill="rgb(220,45,38)" rx="2" ry="2" />
+<text  x="598.18" y="159.5" >s..</text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.writeObject0:1179 (522 samples, 1.12%)</title><rect x="1167.4" y="309" width="13.2" height="15.0" fill="rgb(205,142,8)" rx="2" ry="2" />
+<text  x="1170.35" y="319.5" ></text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.write:156 (6 samples, 0.01%)</title><rect x="1153.7" y="213" width="0.1" height="15.0" fill="rgb(223,69,21)" rx="2" ry="2" />
+<text  x="1156.70" y="223.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.FutureTask.run:264 (45,060 samples, 96.94%)</title><rect x="23.3" y="501" width="1144.0" height="15.0" fill="rgb(217,203,2)" rx="2" ry="2" />
+<text  x="26.30" y="511.5" >java.util.concurrent.FutureTask.run:264</text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.grow:120 (6 samples, 0.01%)</title><rect x="1153.7" y="181" width="0.1" height="15.0" fill="rgb(217,53,31)" rx="2" ry="2" />
+<text  x="1156.70" y="191.5" ></text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.writeObject:349 (522 samples, 1.12%)</title><rect x="1167.4" y="421" width="13.2" height="15.0" fill="rgb(217,91,14)" rx="2" ry="2" />
+<text  x="1170.35" y="431.5" ></text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.writeSerialData:1510 (522 samples, 1.12%)</title><rect x="1167.4" y="277" width="13.2" height="15.0" fill="rgb(222,166,7)" rx="2" ry="2" />
+<text  x="1170.35" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.AbstractDrbg.engineNextBytes:334 (5,234 samples, 11.26%)</title><rect x="528.7" y="229" width="132.8" height="15.0" fill="rgb(234,130,36)" rx="2" ry="2" />
+<text  x="531.66" y="239.5" >sun.security.pro..</text>
+</g>
+<g >
+<title>java.security.Provider$ServiceKey.hashCode:1107 (522 samples, 1.12%)</title><rect x="408.8" y="245" width="13.2" height="15.0" fill="rgb(247,138,37)" rx="2" ry="2" />
+<text  x="411.78" y="255.5" ></text>
+</g>
+<g >
+<title>java.security.MessageDigest.digest:385 (1,050 samples, 2.26%)</title><rect x="422.0" y="261" width="26.7" height="15.0" fill="rgb(226,213,23)" rx="2" ry="2" />
+<text  x="425.04" y="271.5" >j..</text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getService:85 (1,044 samples, 2.25%)</title><rect x="395.5" y="293" width="26.5" height="15.0" fill="rgb(248,76,14)" rx="2" ry="2" />
+<text  x="398.53" y="303.5" >s..</text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.hashGen:278 (524 samples, 1.13%)</title><rect x="581.9" y="181" width="13.3" height="15.0" fill="rgb(236,15,45)" rx="2" ry="2" />
+<text  x="584.87" y="191.5" ></text>
+</g>
+<g >
+<title>java.security.MessageDigest.digest:385 (2,096 samples, 4.51%)</title><rect x="528.7" y="149" width="53.2" height="15.0" fill="rgb(227,211,22)" rx="2" ry="2" />
+<text  x="531.66" y="159.5" >java...</text>
+</g>
+<g >
+<title>java.lang.Class.getConstructor:2150 (2,088 samples, 4.49%)</title><rect x="89.7" y="117" width="53.0" height="15.0" fill="rgb(207,114,44)" rx="2" ry="2" />
+<text  x="92.72" y="127.5" >java...</text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream$HandleTable.assign:2282 (522 samples, 1.12%)</title><rect x="1167.4" y="213" width="13.2" height="15.0" fill="rgb(238,120,1)" rx="2" ry="2" />
+<text  x="1170.35" y="223.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerValue.&lt;init&gt;:234 (524 samples, 1.13%)</title><rect x="1113.8" y="245" width="13.3" height="15.0" fill="rgb(225,176,10)" rx="2" ry="2" />
+<text  x="1116.79" y="255.5" ></text>
+</g>
+<g >
+<title>java.security.Provider.newInstanceUtil:154 (8,914 samples, 19.18%)</title><rect x="142.7" y="133" width="226.3" height="15.0" fill="rgb(247,219,41)" rx="2" ry="2" />
+<text  x="145.72" y="143.5" >java.security.Provider.newIns..</text>
+</g>
+<g >
+<title>sun.security.util.DerValue.&lt;init&gt;:245 (3,668 samples, 7.89%)</title><rect x="1034.0" y="261" width="93.1" height="15.0" fill="rgb(215,116,28)" rx="2" ry="2" />
+<text  x="1036.97" y="271.5" >sun.securit..</text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3745 (6 samples, 0.01%)</title><rect x="1153.7" y="165" width="0.1" height="15.0" fill="rgb(224,62,54)" rx="2" ry="2" />
+<text  x="1156.70" y="175.5" ></text>
+</g>
+<g >
+<title>sun.security.util.DerOutputStream.&lt;init&gt;:61 (1,058 samples, 2.28%)</title><rect x="953.9" y="261" width="26.9" height="15.0" fill="rgb(241,128,30)" rx="2" ry="2" />
+<text  x="956.95" y="271.5" >s..</text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.hashGen:259 (2,096 samples, 4.51%)</title><rect x="528.7" y="181" width="53.2" height="15.0" fill="rgb(217,6,20)" rx="2" ry="2" />
+<text  x="531.66" y="191.5" >sun.s..</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.engineSign:463 (1,050 samples, 2.26%)</title><rect x="422.0" y="293" width="26.7" height="15.0" fill="rgb(216,21,32)" rx="2" ry="2" />
+<text  x="425.04" y="303.5" >s..</text>
+</g>
+<g >
+<title>java.security.AlgorithmParameters.getInstance:158 (2,622 samples, 5.64%)</title><rect x="448.7" y="229" width="66.6" height="15.0" fill="rgb(216,120,2)" rx="2" ry="2" />
+<text  x="451.74" y="239.5" >java.se..</text>
+</g>
+<g >
+<title>sun.security.provider.AbstractDrbg.engineNextBytes:334 (3,658 samples, 7.87%)</title><rect x="674.9" y="197" width="92.9" height="15.0" fill="rgb(209,109,2)" rx="2" ry="2" />
+<text  x="677.89" y="207.5" >sun.securit..</text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.defaultWriteFields:1553 (522 samples, 1.12%)</title><rect x="1167.4" y="261" width="13.2" height="15.0" fill="rgb(242,8,26)" rx="2" ry="2" />
+<text  x="1170.35" y="271.5" ></text>
+</g>
+<g >
+<title>java.security.Provider.getService:1303 (2,618 samples, 5.63%)</title><rect x="448.8" y="165" width="66.5" height="15.0" fill="rgb(244,222,16)" rx="2" ry="2" />
+<text  x="451.84" y="175.5" >java.se..</text>
+</g>
+<g >
+<title>java.security.Provider.getService:1303 (522 samples, 1.12%)</title><rect x="76.5" y="149" width="13.2" height="15.0" fill="rgb(207,214,46)" rx="2" ry="2" />
+<text  x="79.46" y="159.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.valueOf:1176 (1,048 samples, 2.25%)</title><rect x="621.7" y="181" width="26.6" height="15.0" fill="rgb(219,68,54)" rx="2" ry="2" />
+<text  x="624.68" y="191.5" >j..</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigest:-1 (524 samples, 1.13%)</title><rect x="767.8" y="261" width="13.3" height="15.0" fill="rgb(218,95,6)" rx="2" ry="2" />
+<text  x="770.76" y="271.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.ConcurrentHashMap.get:936 (522 samples, 1.12%)</title><rect x="76.5" y="133" width="13.2" height="15.0" fill="rgb(233,216,47)" rx="2" ry="2" />
+<text  x="79.46" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.stripLeadingZeroBytes:4398 (1,048 samples, 2.25%)</title><rect x="834.2" y="229" width="26.6" height="15.0" fill="rgb(254,2,7)" rx="2" ry="2" />
+<text  x="837.17" y="239.5" >j..</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature$SHA256.&lt;init&gt;:242 (14,662 samples, 31.54%)</title><rect x="23.3" y="261" width="372.2" height="15.0" fill="rgb(212,219,17)" rx="2" ry="2" />
+<text  x="26.30" y="271.5" >sun.security.ec.ECDSASignature$SHA256.&lt;init&gt;:242</text>
+</g>
+<g >
+<title>sun.security.provider.DRBG.engineNextBytes:233 (3,658 samples, 7.87%)</title><rect x="674.9" y="213" width="92.9" height="15.0" fill="rgb(210,11,41)" rx="2" ry="2" />
+<text  x="677.89" y="223.5" >sun.securit..</text>
+</g>
+<g >
+<title>java.util.concurrent.Executors$RunnableAdapter.call:515 (45,060 samples, 96.94%)</title><rect x="23.3" y="517" width="1144.0" height="15.0" fill="rgb(235,67,13)" rx="2" ry="2" />
+<text  x="26.30" y="527.5" >java.util.concurrent.Executors$RunnableAdapter.call:515</text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:164 (12,046 samples, 25.92%)</title><rect x="89.7" y="181" width="305.8" height="15.0" fill="rgb(253,149,34)" rx="2" ry="2" />
+<text  x="92.72" y="191.5" >sun.security.jca.GetInstance.getInstance:..</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.engineSign:475 (15,212 samples, 32.73%)</title><rect x="781.1" y="293" width="386.2" height="15.0" fill="rgb(214,84,37)" rx="2" ry="2" />
+<text  x="784.06" y="303.5" >sun.security.ec.ECDSASignature.engineSign:475</text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:257 (1,582 samples, 3.40%)</title><rect x="1127.1" y="277" width="40.2" height="15.0" fill="rgb(227,160,10)" rx="2" ry="2" />
+<text  x="1130.09" y="287.5" >sun..</text>
+</g>
+<g >
+<title>sun.security.util.DerValue.encode:426 (1,046 samples, 2.25%)</title><rect x="1127.1" y="245" width="26.6" height="15.0" fill="rgb(222,1,18)" rx="2" ry="2" />
+<text  x="1130.14" y="255.5" >s..</text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:224 (1,044 samples, 2.25%)</title><rect x="595.2" y="197" width="26.5" height="15.0" fill="rgb(225,18,46)" rx="2" ry="2" />
+<text  x="598.18" y="207.5" >s..</text>
+</g>
+<g >
+<title>java.security.Provider.getService:1299 (522 samples, 1.12%)</title><rect x="395.5" y="277" width="13.3" height="15.0" fill="rgb(249,214,45)" rx="2" ry="2" />
+<text  x="398.53" y="287.5" ></text>
+</g>
+<g >
+<title>java.security.Signature.getInstance:404 (15,706 samples, 33.79%)</title><rect x="23.3" y="325" width="398.7" height="15.0" fill="rgb(209,90,51)" rx="2" ry="2" />
+<text  x="26.30" y="335.5" >java.security.Signature.getInstance:404</text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:458 (45,060 samples, 96.94%)</title><rect x="23.3" y="485" width="1144.0" height="15.0" fill="rgb(207,77,28)" rx="2" ry="2" />
+<text  x="26.30" y="495.5" >org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:458</text>
+</g>
+<g >
+<title>sun.security.util.DerValue.toByteArray:861 (528 samples, 1.14%)</title><rect x="1153.8" y="261" width="13.5" height="15.0" fill="rgb(222,78,6)" rx="2" ry="2" />
+<text  x="1156.85" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.getDigestValue:338 (1,050 samples, 2.26%)</title><rect x="422.0" y="277" width="26.7" height="15.0" fill="rgb(208,139,18)" rx="2" ry="2" />
+<text  x="425.04" y="287.5" >s..</text>
+</g>
+<g >
+<title>sun.security.jca.ProviderList.getService:380 (2,616 samples, 5.63%)</title><rect x="23.3" y="165" width="66.4" height="15.0" fill="rgb(250,13,54)" rx="2" ry="2" />
+<text  x="26.30" y="175.5" >sun.sec..</text>
+</g>
+<g >
+<title>sun.security.util.DerValue.toByteArray:859 (1,052 samples, 2.26%)</title><rect x="1127.1" y="261" width="26.7" height="15.0" fill="rgb(208,79,20)" rx="2" ry="2" />
+<text  x="1130.14" y="271.5" >s..</text>
+</g>
+<g >
+<title>java.util.concurrent.ThreadPoolExecutor.runWorker:1128 (45,060 samples, 96.94%)</title><rect x="23.3" y="549" width="1144.0" height="15.0" fill="rgb(232,7,50)" rx="2" ry="2" />
+<text  x="26.30" y="559.5" >java.util.concurrent.ThreadPoolExecutor.runWorker:1128</text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:206 (15,706 samples, 33.79%)</title><rect x="23.3" y="309" width="398.7" height="15.0" fill="rgb(240,145,29)" rx="2" ry="2" />
+<text  x="26.30" y="319.5" >sun.security.jca.GetInstance.getInstance:206</text>
+</g>
+<g >
+<title>jdk.internal.reflect.ReflectionFactory.copyConstructor:388 (2,088 samples, 4.49%)</title><rect x="89.7" y="101" width="53.0" height="15.0" fill="rgb(221,178,45)" rx="2" ry="2" />
+<text  x="92.72" y="111.5" >jdk.i..</text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:231 (1,048 samples, 2.25%)</title><rect x="621.7" y="197" width="26.6" height="15.0" fill="rgb(205,101,7)" rx="2" ry="2" />
+<text  x="624.68" y="207.5" >s..</text>
+</g>
+<g >
+<title>sun.security.provider.SHA2.&lt;init&gt;:83 (1,570 samples, 3.38%)</title><rect x="169.3" y="53" width="39.9" height="15.0" fill="rgb(247,80,22)" rx="2" ry="2" />
+<text  x="172.33" y="63.5" >sun..</text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:238 (1,044 samples, 2.25%)</title><rect x="369.0" y="165" width="26.5" height="15.0" fill="rgb(207,39,6)" rx="2" ry="2" />
+<text  x="372.03" y="175.5" >s..</text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.writeObject0:1179 (522 samples, 1.12%)</title><rect x="1167.4" y="405" width="13.2" height="15.0" fill="rgb(244,174,11)" rx="2" ry="2" />
+<text  x="1170.35" y="415.5" ></text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.writeObject0:1179 (522 samples, 1.12%)</title><rect x="1167.4" y="245" width="13.2" height="15.0" fill="rgb(235,54,54)" rx="2" ry="2" />
+<text  x="1170.35" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:245 (1,570 samples, 3.38%)</title><rect x="781.1" y="277" width="39.8" height="15.0" fill="rgb(219,101,8)" rx="2" ry="2" />
+<text  x="784.06" y="287.5" >sun..</text>
+</g>
+<g >
+<title>org.openjdk.jmh.util.InputStreamDrainer.run:77 (370 samples, 0.80%)</title><rect x="1180.6" y="581" width="9.4" height="15.0" fill="rgb(227,40,15)" rx="2" ry="2" />
+<text  x="1183.61" y="591.5" ></text>
+</g>
+<g >
+<title>org.sample.jmh_generated.BenchmarkSigning_secp256k1_1024K_jmhTest.secp256k1_1024K_Throughput:83 (45,060 samples, 96.94%)</title><rect x="23.3" y="389" width="1144.0" height="15.0" fill="rgb(212,124,38)" rx="2" ry="2" />
+<text  x="26.30" y="399.5" >org.sample.jmh_generated.BenchmarkSigning_secp256k1_1024K_jmhTest.secp256k1_1024K_Throughput:83</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.engineSign:469 (13,092 samples, 28.17%)</title><rect x="448.7" y="293" width="332.4" height="15.0" fill="rgb(221,40,40)" rx="2" ry="2" />
+<text  x="451.69" y="303.5" >sun.security.ec.ECDSASignature.engineSign:469</text>
+</g>
+<g >
+<title>java.security.MessageDigest.digest:385 (522 samples, 1.12%)</title><rect x="674.9" y="149" width="13.3" height="15.0" fill="rgb(242,212,32)" rx="2" ry="2" />
+<text  x="677.94" y="159.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.&lt;init&gt;:118 (14,662 samples, 31.54%)</title><rect x="23.3" y="229" width="372.2" height="15.0" fill="rgb(242,93,20)" rx="2" ry="2" />
+<text  x="26.30" y="239.5" >sun.security.ec.ECDSASignature.&lt;init&gt;:118</text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.writeOrdinaryObject:1433 (522 samples, 1.12%)</title><rect x="1167.4" y="293" width="13.2" height="15.0" fill="rgb(211,47,32)" rx="2" ry="2" />
+<text  x="1170.35" y="303.5" ></text>
+</g>
+<g >
+<title>java.security.Signature.sign:711 (29,354 samples, 63.15%)</title><rect x="422.0" y="325" width="745.3" height="15.0" fill="rgb(229,186,35)" rx="2" ry="2" />
+<text  x="425.04" y="335.5" >java.security.Signature.sign:711</text>
+</g>
+<g >
+<title>java.security.Provider.newInstanceUtil:153 (2,088 samples, 4.49%)</title><rect x="89.7" y="133" width="53.0" height="15.0" fill="rgb(207,70,29)" rx="2" ry="2" />
+<text  x="92.72" y="143.5" >java...</text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.toByteArray:211 (528 samples, 1.14%)</title><rect x="1153.8" y="245" width="13.5" height="15.0" fill="rgb(234,165,25)" rx="2" ry="2" />
+<text  x="1156.85" y="255.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.SHA2.&lt;init&gt;:86 (6,296 samples, 13.55%)</title><rect x="209.2" y="53" width="159.8" height="15.0" fill="rgb(235,176,33)" rx="2" ry="2" />
+<text  x="212.19" y="63.5" >sun.security.provide..</text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.ensureCapacity:95 (6 samples, 0.01%)</title><rect x="1153.7" y="197" width="0.1" height="15.0" fill="rgb(207,149,14)" rx="2" ry="2" />
+<text  x="1156.70" y="207.5" ></text>
+</g>
+<g >
+<title>java.io.ObjectOutputStream.writeObject0:1175 (522 samples, 1.12%)</title><rect x="1167.4" y="341" width="13.2" height="15.0" fill="rgb(228,72,24)" rx="2" ry="2" />
+<text  x="1170.35" y="351.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3745 (524 samples, 1.13%)</title><rect x="581.9" y="165" width="13.3" height="15.0" fill="rgb(213,127,23)" rx="2" ry="2" />
+<text  x="584.87" y="175.5" ></text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigestNative:439 (5,234 samples, 11.26%)</title><rect x="528.7" y="277" width="132.8" height="15.0" fill="rgb(210,98,40)" rx="2" ry="2" />
+<text  x="531.66" y="287.5" >sun.security.ec...</text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:253 (524 samples, 1.13%)</title><rect x="980.8" y="277" width="13.3" height="15.0" fill="rgb(232,167,54)" rx="2" ry="2" />
+<text  x="983.81" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:247 (1,570 samples, 3.38%)</title><rect x="820.9" y="277" width="39.9" height="15.0" fill="rgb(227,157,48)" rx="2" ry="2" />
+<text  x="823.92" y="287.5" >sun..</text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:157 (2,622 samples, 5.64%)</title><rect x="448.7" y="197" width="66.6" height="15.0" fill="rgb(233,123,27)" rx="2" ry="2" />
+<text  x="451.74" y="207.5" >sun.sec..</text>
+</g>
+<g >
+<title>sun.security.ec.ECDSASignature.signDigestNative:447 (524 samples, 1.13%)</title><rect x="767.8" y="277" width="13.3" height="15.0" fill="rgb(248,92,12)" rx="2" ry="2" />
+<text  x="770.76" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.util.ECUtil.encodeSignature:251 (1,058 samples, 2.28%)</title><rect x="953.9" y="277" width="26.9" height="15.0" fill="rgb(211,48,33)" rx="2" ry="2" />
+<text  x="956.95" y="287.5" >s..</text>
+</g>
+<g >
+<title>java.math.BigInteger.toByteArray:4119 (524 samples, 1.13%)</title><rect x="688.2" y="149" width="13.3" height="15.0" fill="rgb(235,85,22)" rx="2" ry="2" />
+<text  x="691.20" y="159.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BaseRunner.runBenchmark:233 (524 samples, 1.13%)</title><rect x="1167.3" y="517" width="13.3" height="15.0" fill="rgb(206,163,45)" rx="2" ry="2" />
+<text  x="1170.30" y="527.5" ></text>
+</g>
+</g>
+</svg>
