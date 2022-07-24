@@ -5,36 +5,31 @@ import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 import java.security.*;
-import org.bouncycastle.jcajce.provider.asymmetric.ec.BCECPrivateKey;
-import org.bouncycastle.jcajce.provider.asymmetric.ec.BCECPublicKey;
-import org.bouncycastle.util.encoders.Hex;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
 @State(Scope.Thread)
 public class BenchmarkSigning {
     SM2Util sm2p256v1;
-    String pubKey;
-    String prvKey;
+    PublicKey pubKey;
+    PrivateKey prvKey;
 
-    String msg_128B;
-    String msg_256B;
-    String msg_1024B;
-    String msg_1024K;
+    byte[] msg_128B;
+    byte[] msg_256B;
+    byte[] msg_1024B;
+    byte[] msg_1024K;
 
     @Setup
     public void prepare() throws Exception {
         sm2p256v1 = new SM2Util();
         KeyPair keyPair = sm2p256v1.generateSm2KeyPair();
-        BCECPrivateKey privateKey = (BCECPrivateKey) keyPair.getPrivate();
-        BCECPublicKey publicKey = (BCECPublicKey) keyPair.getPublic();
-        pubKey = new String(Hex.encode(publicKey.getQ().getEncoded(true)));
-        prvKey = privateKey.getD().toString(16);
+        prvKey = keyPair.getPrivate();
+        pubKey = keyPair.getPublic();
 
-        msg_128B = Files.readString(Paths.get("resources/128B.txt"));
-        msg_256B = Files.readString(Paths.get("resources/256B.txt"));
-        msg_1024B = Files.readString(Paths.get("resources/1024B.txt"));
-        msg_1024K = Files.readString(Paths.get("resources/1024K.txt"));
+        msg_128B = Files.readAllBytes(Paths.get("resources/128B.txt"));
+        msg_256B = Files.readAllBytes(Paths.get("resources/256B.txt"));
+        msg_1024B = Files.readAllBytes(Paths.get("resources/1024B.txt"));
+        msg_1024K = Files.readAllBytes(Paths.get("resources/1024K.txt"));
     }
 
     @Benchmark

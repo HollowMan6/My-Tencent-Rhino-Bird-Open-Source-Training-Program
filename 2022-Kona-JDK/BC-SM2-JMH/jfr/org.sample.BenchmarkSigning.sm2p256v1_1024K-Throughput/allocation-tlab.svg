@@ -1,0 +1,2004 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="710" onload="init(evt)" viewBox="0 0 1200 710" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom();
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				clearzoom();
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x = txt.length - 2; x > 0; x--) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom() {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="710.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >allocation-tlab sm2p256v1_1024K-Throughput</text>
+<text id="details" x="10.00" y="693" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="693" > </text>
+<g id="frames">
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.square:-1 (524 samples, 0.01%)</title><rect x="1183.6" y="293" width="0.1" height="15.0" fill="rgb(243,18,37)" rx="2" ry="2" />
+<text  x="1186.59" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (530 samples, 0.01%)</title><rect x="15.2" y="181" width="0.2" height="15.0" fill="rgb(214,6,27)" rx="2" ry="2" />
+<text  x="18.24" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECCurve.precompute:-1 (7,358 samples, 0.16%)</title><rect x="977.4" y="245" width="1.9" height="15.0" fill="rgb(234,194,41)" rx="2" ry="2" />
+<text  x="980.39" y="255.5" ></text>
+</g>
+<g >
+<title>java.security.Provider$Service.newInstance:1915 (5,242 samples, 0.11%)</title><rect x="10.1" y="341" width="1.4" height="15.0" fill="rgb(235,36,5)" rx="2" ry="2" />
+<text  x="13.13" y="351.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (2,622 samples, 0.06%)</title><rect x="978.3" y="181" width="0.7" height="15.0" fill="rgb(228,70,7)" rx="2" ry="2" />
+<text  x="981.33" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.&lt;init&gt;:-1 (4,182 samples, 0.09%)</title><rect x="962.1" y="213" width="1.1" height="15.0" fill="rgb(245,60,12)" rx="2" ry="2" />
+<text  x="965.09" y="223.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke:43 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="501" width="1179.3" height="15.0" fill="rgb(212,191,11)" rx="2" ry="2" />
+<text  x="13.13" y="511.5" >jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke:43</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (2,098 samples, 0.05%)</title><rect x="977.8" y="181" width="0.5" height="15.0" fill="rgb(219,58,18)" rx="2" ry="2" />
+<text  x="980.79" y="191.5" ></text>
+</g>
+<g >
+<title>org.sample.SM2Util.sign:42 (845,638 samples, 18.36%)</title><rect x="972.7" y="405" width="216.7" height="15.0" fill="rgb(224,91,25)" rx="2" ry="2" />
+<text  x="975.68" y="415.5" >org.sample.SM2Util.sign:42</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (543,132 samples, 11.79%)</title><rect x="220.1" y="213" width="139.1" height="15.0" fill="rgb(205,103,15)" rx="2" ry="2" />
+<text  x="223.08" y="223.5" >org.bouncycastle...</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Mod.modOddInverse:-1 (2,094 samples, 0.05%)</title><rect x="1186.3" y="309" width="0.5" height="15.0" fill="rgb(223,12,47)" rx="2" ry="2" />
+<text  x="1189.28" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.multiply:-1 (186,976 samples, 4.06%)</title><rect x="96.3" y="181" width="47.9" height="15.0" fill="rgb(232,97,25)" rx="2" ry="2" />
+<text  x="99.33" y="191.5" >org...</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (23,522 samples, 0.51%)</title><rect x="1097.5" y="261" width="6.0" height="15.0" fill="rgb(254,121,43)" rx="2" ry="2" />
+<text  x="1100.52" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (2,098 samples, 0.05%)</title><rect x="977.8" y="165" width="0.5" height="15.0" fill="rgb(213,86,34)" rx="2" ry="2" />
+<text  x="980.79" y="175.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (227,404 samples, 4.94%)</title><rect x="626.5" y="229" width="58.2" height="15.0" fill="rgb(219,104,2)" rx="2" ry="2" />
+<text  x="629.47" y="239.5" >org.bo..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (522 samples, 0.01%)</title><rect x="955.8" y="261" width="0.1" height="15.0" fill="rgb(250,226,20)" rx="2" ry="2" />
+<text  x="958.78" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.randomMult:-1 (1,570 samples, 0.03%)</title><rect x="956.3" y="293" width="0.4" height="15.0" fill="rgb(225,60,36)" rx="2" ry="2" />
+<text  x="959.32" y="303.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:4102 (1,048 samples, 0.02%)</title><rect x="975.1" y="245" width="0.3" height="15.0" fill="rgb(247,158,26)" rx="2" ry="2" />
+<text  x="978.10" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (1,048 samples, 0.02%)</title><rect x="977.5" y="181" width="0.3" height="15.0" fill="rgb(215,82,44)" rx="2" ry="2" />
+<text  x="980.52" y="191.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder$$Lambda$87.1978144657.run:-1 (1,159 samples, 0.03%)</title><rect x="1189.4" y="629" width="0.3" height="15.0" fill="rgb(205,178,4)" rx="2" ry="2" />
+<text  x="1192.36" y="639.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2355 (6,826 samples, 0.15%)</title><rect x="973.6" y="293" width="1.8" height="15.0" fill="rgb(221,154,22)" rx="2" ry="2" />
+<text  x="976.62" y="303.5" ></text>
+</g>
+<g >
+<title>java.lang.Class.getConstructor:2150 (1,048 samples, 0.02%)</title><rect x="10.1" y="309" width="0.3" height="15.0" fill="rgb(250,221,29)" rx="2" ry="2" />
+<text  x="13.13" y="319.5" ></text>
+</g>
+<g >
+<title>java.security.Signature$Delegate.engineSign:1402 (845,638 samples, 18.36%)</title><rect x="972.7" y="373" width="216.7" height="15.0" fill="rgb(233,193,26)" rx="2" ry="2" />
+<text  x="975.68" y="383.5" >java.security.Signature$Dele..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint$AbstractFp.&lt;init&gt;:-1 (1,044 samples, 0.02%)</title><rect x="954.7" y="245" width="0.3" height="15.0" fill="rgb(224,170,49)" rx="2" ry="2" />
+<text  x="957.71" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (4,196 samples, 0.09%)</title><rect x="769.7" y="261" width="1.1" height="15.0" fill="rgb(243,61,8)" rx="2" ry="2" />
+<text  x="772.71" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Mod.checkedModOddInverse:-1 (2,096 samples, 0.05%)</title><rect x="956.7" y="277" width="0.6" height="15.0" fill="rgb(230,37,28)" rx="2" ry="2" />
+<text  x="959.72" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.&lt;init&gt;:-1 (1,044 samples, 0.02%)</title><rect x="954.7" y="229" width="0.3" height="15.0" fill="rgb(221,189,2)" rx="2" ry="2" />
+<text  x="957.71" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.&lt;init&gt;:-1 (45,038 samples, 0.98%)</title><rect x="84.8" y="133" width="11.5" height="15.0" fill="rgb(218,124,3)" rx="2" ry="2" />
+<text  x="87.79" y="143.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (522 samples, 0.01%)</title><rect x="955.9" y="261" width="0.1" height="15.0" fill="rgb(228,179,35)" rx="2" ry="2" />
+<text  x="958.91" y="271.5" ></text>
+</g>
+<g >
+<title>java.security.Signature.getInstance:297 (1,048 samples, 0.02%)</title><rect x="11.6" y="373" width="0.3" height="15.0" fill="rgb(214,153,42)" rx="2" ry="2" />
+<text  x="14.61" y="383.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine$RequestHook.execute:70 (610 samples, 0.01%)</title><rect x="1189.5" y="549" width="0.2" height="15.0" fill="rgb(217,205,0)" rx="2" ry="2" />
+<text  x="1192.51" y="559.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECAlgorithms.implCheckResult:-1 (7,358 samples, 0.16%)</title><rect x="977.4" y="293" width="1.9" height="15.0" fill="rgb(253,125,30)" rx="2" ry="2" />
+<text  x="980.39" y="303.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3405 (1,046 samples, 0.02%)</title><rect x="954.0" y="261" width="0.3" height="15.0" fill="rgb(210,8,42)" rx="2" ry="2" />
+<text  x="957.04" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve$1.createPoint:-1 (26,726 samples, 0.58%)</title><rect x="755.1" y="277" width="6.8" height="15.0" fill="rgb(235,27,43)" rx="2" ry="2" />
+<text  x="758.07" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Mod.modOddInverse:-1 (2,096 samples, 0.05%)</title><rect x="956.7" y="261" width="0.6" height="15.0" fill="rgb(214,92,11)" rx="2" ry="2" />
+<text  x="959.72" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.jcajce.provider.asymmetric.util.EC5Util.convertSpec:-1 (57,579 samples, 1.25%)</title><rect x="957.9" y="309" width="14.8" height="15.0" fill="rgb(236,202,47)" rx="2" ry="2" />
+<text  x="960.93" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.&lt;init&gt;:-1 (4,182 samples, 0.09%)</title><rect x="962.1" y="245" width="1.1" height="15.0" fill="rgb(250,33,5)" rx="2" ry="2" />
+<text  x="965.09" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.getInitialZCoords:-1 (45,038 samples, 0.98%)</title><rect x="84.8" y="117" width="11.5" height="15.0" fill="rgb(222,85,3)" rx="2" ry="2" />
+<text  x="87.79" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:164 (1,048 samples, 0.02%)</title><rect x="975.1" y="261" width="0.3" height="15.0" fill="rgb(252,154,36)" rx="2" ry="2" />
+<text  x="978.10" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.fromBigInteger:-1 (37,166 samples, 0.81%)</title><rect x="86.8" y="53" width="9.5" height="15.0" fill="rgb(254,60,35)" rx="2" ry="2" />
+<text  x="89.81" y="63.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (113,594 samples, 2.47%)</title><rect x="684.7" y="229" width="29.1" height="15.0" fill="rgb(246,198,10)" rx="2" ry="2" />
+<text  x="687.74" y="239.5" >or..</text>
+</g>
+<g >
+<title>java.util.Hashtable.addEntry:450 (522 samples, 0.01%)</title><rect x="977.4" y="213" width="0.1" height="15.0" fill="rgb(212,9,27)" rx="2" ry="2" />
+<text  x="980.39" y="223.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.&lt;init&gt;:-1 (36,623 samples, 0.80%)</title><rect x="963.3" y="245" width="9.4" height="15.0" fill="rgb(213,13,6)" rx="2" ry="2" />
+<text  x="966.30" y="255.5" ></text>
+</g>
+<g >
+<title>java.lang.reflect.Constructor.newInstance:490 (4,194 samples, 0.09%)</title><rect x="10.4" y="309" width="1.1" height="15.0" fill="rgb(247,201,6)" rx="2" ry="2" />
+<text  x="13.40" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (543,132 samples, 11.79%)</title><rect x="220.1" y="197" width="139.1" height="15.0" fill="rgb(221,3,29)" rx="2" ry="2" />
+<text  x="223.08" y="207.5" >org.bouncycastle...</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (19,950 samples, 0.43%)</title><rect x="750.0" y="229" width="5.1" height="15.0" fill="rgb(209,67,51)" rx="2" ry="2" />
+<text  x="752.96" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.randomFieldElementMult:-1 (5,236 samples, 0.11%)</title><rect x="1183.7" y="309" width="1.4" height="15.0" fill="rgb(212,163,16)" rx="2" ry="2" />
+<text  x="1186.73" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (2,096 samples, 0.05%)</title><rect x="715.1" y="213" width="0.5" height="15.0" fill="rgb(238,12,7)" rx="2" ry="2" />
+<text  x="718.05" y="223.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.twice:-1 (322,775 samples, 7.01%)</title><rect x="871.3" y="277" width="82.7" height="15.0" fill="rgb(231,2,7)" rx="2" ry="2" />
+<text  x="874.33" y="287.5" >org.bounc..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.createRawPoint:-1 (7,346 samples, 0.16%)</title><rect x="984.9" y="261" width="1.9" height="15.0" fill="rgb(219,135,17)" rx="2" ry="2" />
+<text  x="987.90" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (95,924 samples, 2.08%)</title><rect x="879.4" y="261" width="24.6" height="15.0" fill="rgb(231,156,13)" rx="2" ry="2" />
+<text  x="882.40" y="271.5" >o..</text>
+</g>
+<g >
+<title>java.util.concurrent.FutureTask.run:264 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="565" width="1179.3" height="15.0" fill="rgb(230,173,40)" rx="2" ry="2" />
+<text  x="13.13" y="575.5" >java.util.concurrent.FutureTask.run:264</text>
+</g>
+<g >
+<title>java.security.Signature.getInstance:450 (5,770 samples, 0.13%)</title><rect x="10.1" y="389" width="1.5" height="15.0" fill="rgb(211,137,47)" rx="2" ry="2" />
+<text  x="13.13" y="399.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.invert:-1 (2,098 samples, 0.05%)</title><rect x="1185.1" y="309" width="0.5" height="15.0" fill="rgb(230,139,51)" rx="2" ry="2" />
+<text  x="1188.07" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.twice:-1 (307,661 samples, 6.68%)</title><rect x="1103.5" y="277" width="78.9" height="15.0" fill="rgb(250,210,12)" rx="2" ry="2" />
+<text  x="1106.55" y="287.5" >org.bounc..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.add:-1 (558,435 samples, 12.13%)</title><rect x="612.0" y="245" width="143.1" height="15.0" fill="rgb(247,150,3)" rx="2" ry="2" />
+<text  x="614.98" y="255.5" >org.bouncycastle.m..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.&lt;init&gt;:-1 (45,038 samples, 0.98%)</title><rect x="84.8" y="165" width="11.5" height="15.0" fill="rgb(240,84,40)" rx="2" ry="2" />
+<text  x="87.79" y="175.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECCurve.createPoint:-1 (43,425 samples, 0.94%)</title><rect x="961.6" y="277" width="11.1" height="15.0" fill="rgb(228,180,3)" rx="2" ry="2" />
+<text  x="964.56" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint$AbstractFp.&lt;init&gt;:-1 (4,182 samples, 0.09%)</title><rect x="962.1" y="229" width="1.1" height="15.0" fill="rgb(254,216,15)" rx="2" ry="2" />
+<text  x="965.09" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.fromBigInteger:-1 (36,623 samples, 0.80%)</title><rect x="963.3" y="229" width="9.4" height="15.0" fill="rgb(223,133,7)" rx="2" ry="2" />
+<text  x="966.30" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.normalize:-1 (12,046 samples, 0.26%)</title><rect x="1183.1" y="325" width="3.0" height="15.0" fill="rgb(245,215,28)" rx="2" ry="2" />
+<text  x="1186.06" y="335.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (524 samples, 0.01%)</title><rect x="957.3" y="293" width="0.1" height="15.0" fill="rgb(232,65,48)" rx="2" ry="2" />
+<text  x="960.26" y="303.5" ></text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:238 (528 samples, 0.01%)</title><rect x="11.5" y="357" width="0.1" height="15.0" fill="rgb(209,188,45)" rx="2" ry="2" />
+<text  x="14.48" y="367.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.add:-1 (400,690 samples, 8.70%)</title><rect x="1000.9" y="277" width="102.6" height="15.0" fill="rgb(230,118,40)" rx="2" ry="2" />
+<text  x="1003.88" y="287.5" >org.bouncyca..</text>
+</g>
+<g >
+<title>all (4,605,200 samples, 100%)</title><rect x="10.0" y="661" width="1180.0" height="15.0" fill="rgb(213,184,18)" rx="2" ry="2" />
+<text  x="13.00" y="671.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (39,246 samples, 0.85%)</title><rect x="162.4" y="181" width="10.0" height="15.0" fill="rgb(221,64,7)" rx="2" ry="2" />
+<text  x="165.37" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.FixedPointCombMultiplier.multiplyPositive:-1 (3,664,905 samples, 79.58%)</title><rect x="15.4" y="309" width="939.0" height="15.0" fill="rgb(239,177,27)" rx="2" ry="2" />
+<text  x="18.38" y="319.5" >org.bouncycastle.math.ec.FixedPointCombMultiplier.multiplyPositive:-1</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:186 (1,050 samples, 0.02%)</title><rect x="975.1" y="277" width="0.3" height="15.0" fill="rgb(224,41,21)" rx="2" ry="2" />
+<text  x="978.10" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.AbstractDrbg.engineNextBytes:334 (3,142 samples, 0.07%)</title><rect x="1184.3" y="229" width="0.8" height="15.0" fill="rgb(225,107,8)" rx="2" ry="2" />
+<text  x="1187.26" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat.create:-1 (522 samples, 0.01%)</title><rect x="1186.8" y="309" width="0.1" height="15.0" fill="rgb(237,125,40)" rx="2" ry="2" />
+<text  x="1189.81" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.invert:-1 (2,620 samples, 0.06%)</title><rect x="956.7" y="309" width="0.7" height="15.0" fill="rgb(220,188,5)" rx="2" ry="2" />
+<text  x="959.72" y="319.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3434 (21,957 samples, 0.48%)</title><rect x="966.7" y="181" width="5.6" height="15.0" fill="rgb(240,76,5)" rx="2" ry="2" />
+<text  x="969.66" y="191.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.add:1309 (1,046 samples, 0.02%)</title><rect x="972.7" y="325" width="0.3" height="15.0" fill="rgb(213,179,13)" rx="2" ry="2" />
+<text  x="975.68" y="335.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (5,234 samples, 0.11%)</title><rect x="999.1" y="277" width="1.4" height="15.0" fill="rgb(248,60,41)" rx="2" ry="2" />
+<text  x="1002.14" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (522 samples, 0.01%)</title><rect x="1183.1" y="133" width="0.1" height="15.0" fill="rgb(237,203,47)" rx="2" ry="2" />
+<text  x="1186.06" y="143.5" ></text>
+</g>
+<g >
+<title>java.security.Signature$Delegate.engineInitSign:1349 (3,749,740 samples, 81.42%)</title><rect x="11.9" y="373" width="960.8" height="15.0" fill="rgb(232,206,45)" rx="2" ry="2" />
+<text  x="14.88" y="383.5" >java.security.Signature$Delegate.engineInitSign:1349</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve$1.lookup:-1 (65,469 samples, 1.42%)</title><rect x="979.3" y="293" width="16.7" height="15.0" fill="rgb(232,34,44)" rx="2" ry="2" />
+<text  x="982.27" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (30,404 samples, 0.66%)</title><rect x="761.9" y="277" width="7.8" height="15.0" fill="rgb(249,55,8)" rx="2" ry="2" />
+<text  x="764.92" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.crypto.signers.SM2Signer.generateSignature:-1 (845,638 samples, 18.36%)</title><rect x="972.7" y="341" width="216.7" height="15.0" fill="rgb(237,16,0)" rx="2" ry="2" />
+<text  x="975.68" y="351.5" >org.bouncycastle.crypto.sign..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.normalize:-1 (7,326 samples, 0.16%)</title><rect x="954.4" y="309" width="1.9" height="15.0" fill="rgb(235,50,36)" rx="2" ry="2" />
+<text  x="957.44" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.DRBG.engineNextBytes:233 (3,142 samples, 0.07%)</title><rect x="1184.3" y="245" width="0.8" height="15.0" fill="rgb(209,200,50)" rx="2" ry="2" />
+<text  x="1187.26" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (4,196 samples, 0.09%)</title><rect x="769.7" y="277" width="1.1" height="15.0" fill="rgb(248,179,43)" rx="2" ry="2" />
+<text  x="772.71" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.fromBigInteger:-1 (37,151 samples, 0.81%)</title><rect x="963.2" y="261" width="9.5" height="15.0" fill="rgb(223,37,35)" rx="2" ry="2" />
+<text  x="966.17" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (524 samples, 0.01%)</title><rect x="1183.2" y="245" width="0.1" height="15.0" fill="rgb(253,162,12)" rx="2" ry="2" />
+<text  x="1186.19" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.multiply:-1 (2,626 samples, 0.06%)</title><rect x="13.8" y="197" width="0.6" height="15.0" fill="rgb(240,183,3)" rx="2" ry="2" />
+<text  x="16.76" y="207.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1523 (1,052 samples, 0.02%)</title><rect x="974.8" y="245" width="0.3" height="15.0" fill="rgb(245,103,27)" rx="2" ry="2" />
+<text  x="977.83" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.&lt;init&gt;:-1 (522 samples, 0.01%)</title><rect x="1183.1" y="261" width="0.1" height="15.0" fill="rgb(254,134,29)" rx="2" ry="2" />
+<text  x="1186.06" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (89,029 samples, 1.93%)</title><rect x="820.7" y="245" width="22.8" height="15.0" fill="rgb(218,225,21)" rx="2" ry="2" />
+<text  x="823.73" y="255.5" >o..</text>
+</g>
+<g >
+<title>jdk.internal.reflect.DelegatingConstructorAccessorImpl.newInstance:45 (4,194 samples, 0.09%)</title><rect x="10.4" y="293" width="1.1" height="15.0" fill="rgb(252,75,8)" rx="2" ry="2" />
+<text  x="13.40" y="303.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.multiply:1595 (524 samples, 0.01%)</title><rect x="975.4" y="309" width="0.1" height="15.0" fill="rgb(236,71,1)" rx="2" ry="2" />
+<text  x="978.37" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (1,052 samples, 0.02%)</title><rect x="770.8" y="261" width="0.3" height="15.0" fill="rgb(254,125,20)" rx="2" ry="2" />
+<text  x="773.79" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.AbstractECMultiplier.checkResult:-1 (7,352 samples, 0.16%)</title><rect x="13.5" y="309" width="1.9" height="15.0" fill="rgb(205,212,49)" rx="2" ry="2" />
+<text  x="16.49" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (95,924 samples, 2.08%)</title><rect x="879.4" y="245" width="24.6" height="15.0" fill="rgb(246,127,16)" rx="2" ry="2" />
+<text  x="882.40" y="255.5" >o..</text>
+</g>
+<g >
+<title>java.math.BigInteger.valueOf:1176 (524 samples, 0.01%)</title><rect x="1184.4" y="181" width="0.1" height="15.0" fill="rgb(223,140,28)" rx="2" ry="2" />
+<text  x="1187.40" y="191.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRight:3375 (35,049 samples, 0.76%)</title><rect x="963.3" y="197" width="9.0" height="15.0" fill="rgb(206,2,34)" rx="2" ry="2" />
+<text  x="966.30" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (306,540 samples, 6.66%)</title><rect x="521.4" y="213" width="78.5" height="15.0" fill="rgb(246,107,17)" rx="2" ry="2" />
+<text  x="524.37" y="223.5" >org.bounc..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.createScaledPoint:-1 (5,748 samples, 0.12%)</title><rect x="954.4" y="293" width="1.5" height="15.0" fill="rgb(239,127,24)" rx="2" ry="2" />
+<text  x="957.44" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.jcajce.provider.asymmetric.util.EC5Util.convertCurve:-1 (12,588 samples, 0.27%)</title><rect x="958.3" y="293" width="3.3" height="15.0" fill="rgb(222,174,45)" rx="2" ry="2" />
+<text  x="961.33" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.AbstractECMultiplier.multiply:-1 (3,672,257 samples, 79.74%)</title><rect x="13.5" y="325" width="940.9" height="15.0" fill="rgb(212,41,5)" rx="2" ry="2" />
+<text  x="16.49" y="335.5" >org.bouncycastle.math.ec.AbstractECMultiplier.multiply:-1</text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine.run_requests:212 (477 samples, 0.01%)</title><rect x="1189.4" y="565" width="0.1" height="15.0" fill="rgb(205,66,4)" rx="2" ry="2" />
+<text  x="1192.36" y="575.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint$AbstractFp.&lt;init&gt;:-1 (45,038 samples, 0.98%)</title><rect x="84.8" y="149" width="11.5" height="15.0" fill="rgb(208,179,17)" rx="2" ry="2" />
+<text  x="87.79" y="159.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint$AbstractFp.satisfiesCurveEquation:-1 (6,828 samples, 0.15%)</title><rect x="977.5" y="213" width="1.8" height="15.0" fill="rgb(216,178,11)" rx="2" ry="2" />
+<text  x="980.52" y="223.5" ></text>
+</g>
+<g >
+<title>org.sample.jmh_generated.BenchmarkSigning_sm2p256v1_1024K_jmhTest.sm2p256v1_1024K_Throughput:83 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="453" width="1179.3" height="15.0" fill="rgb(211,115,40)" rx="2" ry="2" />
+<text  x="13.13" y="463.5" >org.sample.jmh_generated.BenchmarkSigning_sm2p256v1_1024K_jmhTest.sm2p256v1_1024K_Throughput:83</text>
+</g>
+<g >
+<title>org.sample.jmh_generated.BenchmarkSigning_sm2p256v1_1024K_jmhTest.sm2p256v1_1024K_thrpt_jmhStub:119 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="437" width="1179.3" height="15.0" fill="rgb(213,186,6)" rx="2" ry="2" />
+<text  x="13.13" y="447.5" >org.sample.jmh_generated.BenchmarkSigning_sm2p256v1_1024K_jmhTest.sm2p256v1_1024K_thrpt_jmhStub:119</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.isValidPartial:-1 (7,358 samples, 0.16%)</title><rect x="977.4" y="277" width="1.9" height="15.0" fill="rgb(231,52,22)" rx="2" ry="2" />
+<text  x="980.39" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.&lt;init&gt;:-1 (3,134 samples, 0.07%)</title><rect x="962.4" y="165" width="0.8" height="15.0" fill="rgb(217,52,29)" rx="2" ry="2" />
+<text  x="965.36" y="175.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.multiply:-1 (2,096 samples, 0.05%)</title><rect x="1185.6" y="309" width="0.5" height="15.0" fill="rgb(253,118,5)" rx="2" ry="2" />
+<text  x="1188.61" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (1,048 samples, 0.02%)</title><rect x="956.0" y="277" width="0.3" height="15.0" fill="rgb(219,131,28)" rx="2" ry="2" />
+<text  x="959.05" y="287.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3793 (2,090 samples, 0.05%)</title><rect x="960.9" y="181" width="0.5" height="15.0" fill="rgb(217,84,9)" rx="2" ry="2" />
+<text  x="963.88" y="191.5" ></text>
+</g>
+<g >
+<title>org.sample.BenchmarkSigning.sm2p256v1_1024K:52 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="421" width="1179.3" height="15.0" fill="rgb(246,160,21)" rx="2" ry="2" />
+<text  x="13.13" y="431.5" >org.sample.BenchmarkSigning.sm2p256v1_1024K:52</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.createRawPoint:-1 (2,088 samples, 0.05%)</title><rect x="954.4" y="277" width="0.6" height="15.0" fill="rgb(207,179,23)" rx="2" ry="2" />
+<text  x="957.44" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (7,336 samples, 0.16%)</title><rect x="996.2" y="261" width="1.9" height="15.0" fill="rgb(209,114,3)" rx="2" ry="2" />
+<text  x="999.18" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (1,052 samples, 0.02%)</title><rect x="770.8" y="277" width="0.3" height="15.0" fill="rgb(226,202,33)" rx="2" ry="2" />
+<text  x="773.79" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.DRBG.engineNextBytes:233 (1,048 samples, 0.02%)</title><rect x="976.0" y="261" width="0.3" height="15.0" fill="rgb(247,131,25)" rx="2" ry="2" />
+<text  x="979.04" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.negate:-1 (522 samples, 0.01%)</title><rect x="180.9" y="229" width="0.1" height="15.0" fill="rgb(247,23,24)" rx="2" ry="2" />
+<text  x="183.89" y="239.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRight:3375 (2,632 samples, 0.06%)</title><rect x="960.9" y="213" width="0.7" height="15.0" fill="rgb(236,29,47)" rx="2" ry="2" />
+<text  x="963.88" y="223.5" ></text>
+</g>
+<g >
+<title>java.lang.reflect.Method.invoke:566 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="517" width="1179.3" height="15.0" fill="rgb(251,49,18)" rx="2" ry="2" />
+<text  x="13.13" y="527.5" >java.lang.reflect.Method.invoke:566</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.fromBigInteger:-1 (4,182 samples, 0.09%)</title><rect x="962.1" y="181" width="1.1" height="15.0" fill="rgb(210,209,48)" rx="2" ry="2" />
+<text  x="965.09" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.multiply:-1 (1,046 samples, 0.02%)</title><rect x="1183.2" y="277" width="0.3" height="15.0" fill="rgb(207,103,51)" rx="2" ry="2" />
+<text  x="1186.19" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.fromBigInteger:-1 (522 samples, 0.01%)</title><rect x="1183.1" y="149" width="0.1" height="15.0" fill="rgb(239,192,7)" rx="2" ry="2" />
+<text  x="1186.06" y="159.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (114,692 samples, 2.49%)</title><rect x="99.4" y="149" width="29.4" height="15.0" fill="rgb(205,26,17)" rx="2" ry="2" />
+<text  x="102.42" y="159.5" >or..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.createRawPoint:-1 (6,274 samples, 0.14%)</title><rect x="961.6" y="261" width="1.6" height="15.0" fill="rgb(222,222,29)" rx="2" ry="2" />
+<text  x="964.56" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (522 samples, 0.01%)</title><rect x="17.9" y="181" width="0.2" height="15.0" fill="rgb(232,112,38)" rx="2" ry="2" />
+<text  x="20.93" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (74,916 samples, 1.63%)</title><rect x="1055.1" y="261" width="19.2" height="15.0" fill="rgb(205,195,51)" rx="2" ry="2" />
+<text  x="1058.10" y="271.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:386 (1,159 samples, 0.03%)</title><rect x="1189.4" y="613" width="0.3" height="15.0" fill="rgb(208,177,51)" rx="2" ry="2" />
+<text  x="1192.36" y="623.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (1,570 samples, 0.03%)</title><rect x="1000.5" y="277" width="0.4" height="15.0" fill="rgb(210,88,11)" rx="2" ry="2" />
+<text  x="1003.48" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (36,142 samples, 0.78%)</title><rect x="986.8" y="277" width="9.2" height="15.0" fill="rgb(250,83,10)" rx="2" ry="2" />
+<text  x="989.79" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.util.BigIntegers.asUnsignedByteArray:-1 (3,144 samples, 0.07%)</title><rect x="12.7" y="277" width="0.8" height="15.0" fill="rgb(210,51,14)" rx="2" ry="2" />
+<text  x="15.69" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint$1.precompute:-1 (6,828 samples, 0.15%)</title><rect x="977.5" y="229" width="1.8" height="15.0" fill="rgb(232,52,4)" rx="2" ry="2" />
+<text  x="980.52" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.toBigInteger:-1 (522 samples, 0.01%)</title><rect x="1186.1" y="309" width="0.2" height="15.0" fill="rgb(221,171,8)" rx="2" ry="2" />
+<text  x="1189.14" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.jcajce.provider.asymmetric.ec.GMSignatureSpi.engineInitSign:-1 (3,749,740 samples, 81.42%)</title><rect x="11.9" y="357" width="960.8" height="15.0" fill="rgb(224,213,36)" rx="2" ry="2" />
+<text  x="14.88" y="367.5" >org.bouncycastle.jcajce.provider.asymmetric.ec.GMSignatureSpi.engineInitSign:-1</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (39,246 samples, 0.85%)</title><rect x="162.4" y="165" width="10.0" height="15.0" fill="rgb(209,217,6)" rx="2" ry="2" />
+<text  x="165.37" y="175.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.multiply:1564 (524 samples, 0.01%)</title><rect x="975.4" y="325" width="0.1" height="15.0" fill="rgb(213,167,52)" rx="2" ry="2" />
+<text  x="978.37" y="335.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (522 samples, 0.01%)</title><rect x="1183.3" y="261" width="0.2" height="15.0" fill="rgb(236,202,11)" rx="2" ry="2" />
+<text  x="1186.32" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRight:3375 (7,342 samples, 0.16%)</title><rect x="1186.9" y="293" width="1.9" height="15.0" fill="rgb(238,113,20)" rx="2" ry="2" />
+<text  x="1189.95" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (7,336 samples, 0.16%)</title><rect x="996.2" y="277" width="1.9" height="15.0" fill="rgb(210,182,39)" rx="2" ry="2" />
+<text  x="999.18" y="287.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3793 (3,668 samples, 0.08%)</title><rect x="1186.9" y="261" width="1.0" height="15.0" fill="rgb(238,156,36)" rx="2" ry="2" />
+<text  x="1189.95" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1192 (522 samples, 0.01%)</title><rect x="976.0" y="181" width="0.2" height="15.0" fill="rgb(253,225,19)" rx="2" ry="2" />
+<text  x="979.04" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.crypto.signers.SM2Signer.addFieldElement:-1 (6,284 samples, 0.14%)</title><rect x="11.9" y="309" width="1.6" height="15.0" fill="rgb(248,228,37)" rx="2" ry="2" />
+<text  x="14.88" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat.fromBigInteger:-1 (8,388 samples, 0.18%)</title><rect x="1186.9" y="309" width="2.2" height="15.0" fill="rgb(222,157,30)" rx="2" ry="2" />
+<text  x="1189.95" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (524 samples, 0.01%)</title><rect x="1183.2" y="261" width="0.1" height="15.0" fill="rgb(238,147,4)" rx="2" ry="2" />
+<text  x="1186.19" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Mod.checkedModOddInverse:-1 (2,098 samples, 0.05%)</title><rect x="1185.1" y="277" width="0.5" height="15.0" fill="rgb(246,161,52)" rx="2" ry="2" />
+<text  x="1188.07" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (2,092 samples, 0.05%)</title><rect x="714.0" y="213" width="0.5" height="15.0" fill="rgb(218,138,2)" rx="2" ry="2" />
+<text  x="716.98" y="223.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3434 (1,578 samples, 0.03%)</title><rect x="1182.7" y="261" width="0.4" height="15.0" fill="rgb(205,150,6)" rx="2" ry="2" />
+<text  x="1185.65" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (2,096 samples, 0.05%)</title><rect x="1185.6" y="277" width="0.5" height="15.0" fill="rgb(248,215,8)" rx="2" ry="2" />
+<text  x="1188.61" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1163 (5,776 samples, 0.13%)</title><rect x="973.6" y="277" width="1.5" height="15.0" fill="rgb(209,135,8)" rx="2" ry="2" />
+<text  x="976.62" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.multiply:-1 (1,570 samples, 0.03%)</title><rect x="955.9" y="293" width="0.4" height="15.0" fill="rgb(209,102,43)" rx="2" ry="2" />
+<text  x="958.91" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.getInitialZCoords:-1 (4,182 samples, 0.09%)</title><rect x="962.1" y="197" width="1.1" height="15.0" fill="rgb(224,219,38)" rx="2" ry="2" />
+<text  x="965.09" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECCurve.normalizeAll:-1 (634,419 samples, 13.78%)</title><rect x="15.6" y="229" width="162.6" height="15.0" fill="rgb(205,152,7)" rx="2" ry="2" />
+<text  x="18.65" y="239.5" >org.bouncycastle.mat..</text>
+</g>
+<g >
+<title>org.bouncycastle.util.BigIntegers.createRandomBigInteger:-1 (2,094 samples, 0.05%)</title><rect x="975.8" y="309" width="0.5" height="15.0" fill="rgb(226,91,21)" rx="2" ry="2" />
+<text  x="978.78" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (4,190 samples, 0.09%)</title><rect x="998.1" y="277" width="1.0" height="15.0" fill="rgb(251,152,26)" rx="2" ry="2" />
+<text  x="1001.06" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.jcajce.provider.asymmetric.ec.BCECPrivateKey.getParameters:-1 (57,579 samples, 1.25%)</title><rect x="957.9" y="325" width="14.8" height="15.0" fill="rgb(245,181,26)" rx="2" ry="2" />
+<text  x="960.93" y="335.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.crypto.signers.SM2Signer.digestDoFinal:-1 (1,046 samples, 0.02%)</title><rect x="976.3" y="325" width="0.3" height="15.0" fill="rgb(212,84,12)" rx="2" ry="2" />
+<text  x="979.31" y="335.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.multiply:-1 (1,568 samples, 0.03%)</title><rect x="957.4" y="309" width="0.4" height="15.0" fill="rgb(233,47,7)" rx="2" ry="2" />
+<text  x="960.39" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECAlgorithms.montgomeryTrick:-1 (237,897 samples, 5.17%)</title><rect x="16.5" y="213" width="60.9" height="15.0" fill="rgb(232,24,40)" rx="2" ry="2" />
+<text  x="19.45" y="223.5" >org.bo..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (155,627 samples, 3.38%)</title><rect x="780.9" y="245" width="39.8" height="15.0" fill="rgb(238,174,17)" rx="2" ry="2" />
+<text  x="783.86" y="255.5" >org..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.AbstractECMultiplier.multiply:-1 (802,666 samples, 17.43%)</title><rect x="977.4" y="325" width="205.7" height="15.0" fill="rgb(244,218,19)" rx="2" ry="2" />
+<text  x="980.39" y="335.5" >org.bouncycastle.math.ec.Ab..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.square:-1 (3,674 samples, 0.08%)</title><rect x="14.4" y="197" width="1.0" height="15.0" fill="rgb(227,152,28)" rx="2" ry="2" />
+<text  x="17.43" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (1,574 samples, 0.03%)</title><rect x="14.0" y="181" width="0.4" height="15.0" fill="rgb(244,123,9)" rx="2" ry="2" />
+<text  x="17.03" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (2,098 samples, 0.05%)</title><rect x="714.5" y="197" width="0.6" height="15.0" fill="rgb(240,227,44)" rx="2" ry="2" />
+<text  x="717.52" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.toBigInteger:-1 (3,140 samples, 0.07%)</title><rect x="11.9" y="277" width="0.8" height="15.0" fill="rgb(237,72,28)" rx="2" ry="2" />
+<text  x="14.88" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat.fromBigInteger:-1 (1,572 samples, 0.03%)</title><rect x="954.0" y="293" width="0.4" height="15.0" fill="rgb(234,93,19)" rx="2" ry="2" />
+<text  x="957.04" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (3,138 samples, 0.07%)</title><rect x="179.4" y="213" width="0.8" height="15.0" fill="rgb(246,150,34)" rx="2" ry="2" />
+<text  x="182.41" y="223.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:231 (524 samples, 0.01%)</title><rect x="1184.4" y="197" width="0.1" height="15.0" fill="rgb(211,66,40)" rx="2" ry="2" />
+<text  x="1187.40" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (3,138 samples, 0.07%)</title><rect x="955.0" y="245" width="0.8" height="15.0" fill="rgb(208,219,35)" rx="2" ry="2" />
+<text  x="957.98" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECFieldElement.getEncoded:-1 (6,284 samples, 0.14%)</title><rect x="11.9" y="293" width="1.6" height="15.0" fill="rgb(218,153,45)" rx="2" ry="2" />
+<text  x="14.88" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.asn1.ASN1Object.getEncoded:-1 (1,052 samples, 0.02%)</title><rect x="976.8" y="309" width="0.3" height="15.0" fill="rgb(239,39,8)" rx="2" ry="2" />
+<text  x="979.85" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.util.BigIntegers.createRandom:-1 (1,570 samples, 0.03%)</title><rect x="975.9" y="293" width="0.4" height="15.0" fill="rgb(237,164,0)" rx="2" ry="2" />
+<text  x="978.91" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (524 samples, 0.01%)</title><rect x="1183.5" y="277" width="0.1" height="15.0" fill="rgb(218,28,4)" rx="2" ry="2" />
+<text  x="1186.46" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat.create:-1 (1,046 samples, 0.02%)</title><rect x="1188.8" y="293" width="0.3" height="15.0" fill="rgb(229,161,17)" rx="2" ry="2" />
+<text  x="1191.83" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.field.FiniteFields.getPrimeField:-1 (524 samples, 0.01%)</title><rect x="960.3" y="213" width="0.2" height="15.0" fill="rgb(249,136,15)" rx="2" ry="2" />
+<text  x="963.35" y="223.5" ></text>
+</g>
+<g >
+<title>org.sample.SM2Util.sign:38 (3,749,740 samples, 81.42%)</title><rect x="11.9" y="405" width="960.8" height="15.0" fill="rgb(231,44,37)" rx="2" ry="2" />
+<text  x="14.88" y="415.5" >org.sample.SM2Util.sign:38</text>
+</g>
+<g >
+<title>java.security.Signature.sign:711 (845,638 samples, 18.36%)</title><rect x="972.7" y="389" width="216.7" height="15.0" fill="rgb(231,166,16)" rx="2" ry="2" />
+<text  x="975.68" y="399.5" >java.security.Signature.sign..</text>
+</g>
+<g >
+<title>java.util.concurrent.Executors$RunnableAdapter.call:515 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="581" width="1179.3" height="15.0" fill="rgb(243,10,38)" rx="2" ry="2" />
+<text  x="13.13" y="591.5" >java.util.concurrent.Executors$RunnableAdapter.call:515</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.twice:-1 (1,634,849 samples, 35.50%)</title><rect x="181.0" y="229" width="418.9" height="15.0" fill="rgb(208,23,8)" rx="2" ry="2" />
+<text  x="184.02" y="239.5" >org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.twice:-1</text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine$RequestHook$$Lambda$98.828433736.get$Lambda:-1 (610 samples, 0.01%)</title><rect x="1189.5" y="501" width="0.2" height="15.0" fill="rgb(254,180,34)" rx="2" ry="2" />
+<text  x="1192.51" y="511.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.createRawPoint:-1 (2,628 samples, 0.06%)</title><rect x="761.2" y="261" width="0.7" height="15.0" fill="rgb(234,167,24)" rx="2" ry="2" />
+<text  x="764.25" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRight:3375 (1,572 samples, 0.03%)</title><rect x="954.0" y="277" width="0.4" height="15.0" fill="rgb(237,11,20)" rx="2" ry="2" />
+<text  x="957.04" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.multiply:-1 (524 samples, 0.01%)</title><rect x="1183.5" y="293" width="0.1" height="15.0" fill="rgb(234,155,5)" rx="2" ry="2" />
+<text  x="1186.46" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve$1.createPoint:-1 (29,327 samples, 0.64%)</title><rect x="979.3" y="277" width="7.5" height="15.0" fill="rgb(254,158,40)" rx="2" ry="2" />
+<text  x="982.27" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.add:-1 (1,052 samples, 0.02%)</title><rect x="13.5" y="197" width="0.3" height="15.0" fill="rgb(253,101,35)" rx="2" ry="2" />
+<text  x="16.49" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (113,594 samples, 2.47%)</title><rect x="684.7" y="213" width="29.1" height="15.0" fill="rgb(226,196,17)" rx="2" ry="2" />
+<text  x="687.74" y="223.5" >or..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (3,138 samples, 0.07%)</title><rect x="179.4" y="197" width="0.8" height="15.0" fill="rgb(221,131,48)" rx="2" ry="2" />
+<text  x="182.41" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (524 samples, 0.01%)</title><rect x="1183.6" y="261" width="0.1" height="15.0" fill="rgb(212,7,17)" rx="2" ry="2" />
+<text  x="1186.59" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECFieldElement$Fp.calculateResidue:-1 (2,632 samples, 0.06%)</title><rect x="960.9" y="229" width="0.7" height="15.0" fill="rgb(213,129,16)" rx="2" ry="2" />
+<text  x="963.88" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.createRawPoint:-1 (522 samples, 0.01%)</title><rect x="1183.1" y="277" width="0.1" height="15.0" fill="rgb(229,194,44)" rx="2" ry="2" />
+<text  x="1186.06" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (114,692 samples, 2.49%)</title><rect x="99.4" y="165" width="29.4" height="15.0" fill="rgb(210,109,33)" rx="2" ry="2" />
+<text  x="102.42" y="175.5" >or..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.fromBigInteger:-1 (522 samples, 0.01%)</title><rect x="1183.1" y="197" width="0.1" height="15.0" fill="rgb(250,12,46)" rx="2" ry="2" />
+<text  x="1186.06" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (133,116 samples, 2.89%)</title><rect x="21.8" y="181" width="34.1" height="15.0" fill="rgb(230,151,31)" rx="2" ry="2" />
+<text  x="24.82" y="191.5" >or..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (524 samples, 0.01%)</title><rect x="1183.6" y="277" width="0.1" height="15.0" fill="rgb(213,9,43)" rx="2" ry="2" />
+<text  x="1186.59" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.crypto.signers.SM2Signer.init:-1 (3,691,627 samples, 80.16%)</title><rect x="11.9" y="341" width="945.9" height="15.0" fill="rgb(211,50,41)" rx="2" ry="2" />
+<text  x="14.88" y="351.5" >org.bouncycastle.crypto.signers.SM2Signer.init:-1</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.multiply:-1 (231,615 samples, 5.03%)</title><rect x="18.1" y="197" width="59.3" height="15.0" fill="rgb(242,166,28)" rx="2" ry="2" />
+<text  x="21.06" y="207.5" >org.bo..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (2,620 samples, 0.06%)</title><rect x="771.1" y="277" width="0.6" height="15.0" fill="rgb(241,168,27)" rx="2" ry="2" />
+<text  x="774.06" y="287.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine.run_requests:230 (682 samples, 0.01%)</title><rect x="1189.5" y="565" width="0.2" height="15.0" fill="rgb(240,175,10)" rx="2" ry="2" />
+<text  x="1192.49" y="575.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (522 samples, 0.01%)</title><rect x="771.7" y="277" width="0.2" height="15.0" fill="rgb(207,155,1)" rx="2" ry="2" />
+<text  x="774.73" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (524 samples, 0.01%)</title><rect x="1183.5" y="261" width="0.1" height="15.0" fill="rgb(248,140,46)" rx="2" ry="2" />
+<text  x="1186.46" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.randomFieldElementMult:-1 (1,570 samples, 0.03%)</title><rect x="956.3" y="309" width="0.4" height="15.0" fill="rgb(248,89,34)" rx="2" ry="2" />
+<text  x="959.32" y="319.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:458 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="549" width="1179.3" height="15.0" fill="rgb(206,47,26)" rx="2" ry="2" />
+<text  x="13.13" y="559.5" >org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:458</text>
+</g>
+<g >
+<title>sun.security.provider.AbstractDrbg.engineNextBytes:334 (1,048 samples, 0.02%)</title><rect x="976.0" y="245" width="0.3" height="15.0" fill="rgb(235,150,19)" rx="2" ry="2" />
+<text  x="979.04" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (2,096 samples, 0.05%)</title><rect x="1185.6" y="293" width="0.5" height="15.0" fill="rgb(236,113,11)" rx="2" ry="2" />
+<text  x="1188.61" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (3,134 samples, 0.07%)</title><rect x="962.4" y="117" width="0.8" height="15.0" fill="rgb(205,18,51)" rx="2" ry="2" />
+<text  x="965.36" y="127.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.GeneratedConstructorAccessor1.newInstance:-1 (4,194 samples, 0.09%)</title><rect x="10.4" y="277" width="1.1" height="15.0" fill="rgb(237,40,22)" rx="2" ry="2" />
+<text  x="13.40" y="287.5" ></text>
+</g>
+<g >
+<title>java.security.SecureRandom.nextBytes:751 (3,142 samples, 0.07%)</title><rect x="1184.3" y="261" width="0.8" height="15.0" fill="rgb(219,228,36)" rx="2" ry="2" />
+<text  x="1187.26" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:399 (2,092 samples, 0.05%)</title><rect x="12.2" y="229" width="0.5" height="15.0" fill="rgb(222,209,27)" rx="2" ry="2" />
+<text  x="15.15" y="239.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.stripLeadingZeroBytes:4398 (2,092 samples, 0.05%)</title><rect x="12.2" y="213" width="0.5" height="15.0" fill="rgb(220,176,6)" rx="2" ry="2" />
+<text  x="15.15" y="223.5" ></text>
+</g>
+<g >
+<title>java.security.Provider.newInstanceUtil:154 (4,194 samples, 0.09%)</title><rect x="10.4" y="325" width="1.1" height="15.0" fill="rgb(218,207,14)" rx="2" ry="2" />
+<text  x="13.40" y="335.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.implIsValid:-1 (7,352 samples, 0.16%)</title><rect x="13.5" y="261" width="1.9" height="15.0" fill="rgb(212,178,43)" rx="2" ry="2" />
+<text  x="16.49" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3405 (3,668 samples, 0.08%)</title><rect x="1186.9" y="277" width="1.0" height="15.0" fill="rgb(246,189,53)" rx="2" ry="2" />
+<text  x="1189.95" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (1,052 samples, 0.02%)</title><rect x="13.8" y="165" width="0.2" height="15.0" fill="rgb(207,83,20)" rx="2" ry="2" />
+<text  x="16.76" y="175.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3793 (1,054 samples, 0.02%)</title><rect x="1182.4" y="245" width="0.3" height="15.0" fill="rgb(230,144,6)" rx="2" ry="2" />
+<text  x="1185.38" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (60,226 samples, 1.31%)</title><rect x="128.8" y="165" width="15.4" height="15.0" fill="rgb(241,113,8)" rx="2" ry="2" />
+<text  x="131.81" y="175.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.asn1.ASN1EncodableVector.takeElements:-1 (522 samples, 0.01%)</title><rect x="977.1" y="277" width="0.2" height="15.0" fill="rgb(247,33,54)" rx="2" ry="2" />
+<text  x="980.12" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (129,885 samples, 2.82%)</title><rect x="904.0" y="261" width="33.3" height="15.0" fill="rgb(220,40,16)" rx="2" ry="2" />
+<text  x="906.98" y="271.5" >or..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.&lt;init&gt;:-1 (1,044 samples, 0.02%)</title><rect x="954.7" y="261" width="0.3" height="15.0" fill="rgb(219,23,12)" rx="2" ry="2" />
+<text  x="957.71" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (4,190 samples, 0.09%)</title><rect x="998.1" y="261" width="1.0" height="15.0" fill="rgb(246,32,22)" rx="2" ry="2" />
+<text  x="1001.06" y="271.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:475 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="533" width="1179.3" height="15.0" fill="rgb(210,196,9)" rx="2" ry="2" />
+<text  x="13.13" y="543.5" >org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:475</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.fromBigInteger:-1 (522 samples, 0.01%)</title><rect x="1183.1" y="165" width="0.1" height="15.0" fill="rgb(231,171,28)" rx="2" ry="2" />
+<text  x="1186.06" y="175.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECCurve$Fp.&lt;init&gt;:-1 (6,826 samples, 0.15%)</title><rect x="959.8" y="277" width="1.8" height="15.0" fill="rgb(241,54,21)" rx="2" ry="2" />
+<text  x="962.81" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.createCacheSafeLookupTable:-1 (47,084 samples, 1.02%)</title><rect x="599.9" y="245" width="12.1" height="15.0" fill="rgb(227,83,20)" rx="2" ry="2" />
+<text  x="602.92" y="255.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3793 (13,092 samples, 0.28%)</title><rect x="963.3" y="165" width="3.4" height="15.0" fill="rgb(245,5,16)" rx="2" ry="2" />
+<text  x="966.30" y="175.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.FixedPointCombMultiplier.multiplyPositive:-1 (795,308 samples, 17.27%)</title><rect x="979.3" y="309" width="203.8" height="15.0" fill="rgb(212,163,19)" rx="2" ry="2" />
+<text  x="982.27" y="319.5" >org.bouncycastle.math.ec.F..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (116,850 samples, 2.54%)</title><rect x="1109.7" y="261" width="30.0" height="15.0" fill="rgb(207,17,49)" rx="2" ry="2" />
+<text  x="1112.73" y="271.5" >or..</text>
+</g>
+<g >
+<title>java.security.Signature.getInstance:451 (1,048 samples, 0.02%)</title><rect x="11.6" y="389" width="0.3" height="15.0" fill="rgb(240,11,20)" rx="2" ry="2" />
+<text  x="14.61" y="399.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (1,568 samples, 0.03%)</title><rect x="957.4" y="293" width="0.4" height="15.0" fill="rgb(210,38,12)" rx="2" ry="2" />
+<text  x="960.39" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (44,574 samples, 0.97%)</title><rect x="144.4" y="181" width="11.4" height="15.0" fill="rgb(223,28,28)" rx="2" ry="2" />
+<text  x="147.37" y="191.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.add:1403 (522 samples, 0.01%)</title><rect x="972.8" y="309" width="0.2" height="15.0" fill="rgb(238,218,49)" rx="2" ry="2" />
+<text  x="975.82" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.&lt;init&gt;:-1 (522 samples, 0.01%)</title><rect x="1183.1" y="229" width="0.1" height="15.0" fill="rgb(220,210,25)" rx="2" ry="2" />
+<text  x="1186.06" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECCurve.precompute:-1 (7,352 samples, 0.16%)</title><rect x="13.5" y="245" width="1.9" height="15.0" fill="rgb(207,94,41)" rx="2" ry="2" />
+<text  x="16.49" y="255.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2352 (1,568 samples, 0.03%)</title><rect x="973.2" y="293" width="0.4" height="15.0" fill="rgb(221,109,1)" rx="2" ry="2" />
+<text  x="976.22" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.multiply:-1 (70,766 samples, 1.54%)</title><rect x="144.2" y="197" width="18.2" height="15.0" fill="rgb(232,148,27)" rx="2" ry="2" />
+<text  x="147.24" y="207.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1512 (2,102 samples, 0.05%)</title><rect x="974.3" y="245" width="0.5" height="15.0" fill="rgb(216,87,48)" rx="2" ry="2" />
+<text  x="977.30" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.random:-1 (5,236 samples, 0.11%)</title><rect x="1183.7" y="277" width="1.4" height="15.0" fill="rgb(246,160,18)" rx="2" ry="2" />
+<text  x="1186.73" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (74,916 samples, 1.63%)</title><rect x="1055.1" y="245" width="19.2" height="15.0" fill="rgb(231,224,14)" rx="2" ry="2" />
+<text  x="1058.10" y="255.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.ThreadPoolExecutor.runWorker:1128 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="613" width="1179.3" height="15.0" fill="rgb(241,5,49)" rx="2" ry="2" />
+<text  x="13.13" y="623.5" >java.util.concurrent.ThreadPoolExecutor.runWorker:1128</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (2,092 samples, 0.05%)</title><rect x="714.0" y="197" width="0.5" height="15.0" fill="rgb(246,206,38)" rx="2" ry="2" />
+<text  x="716.98" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.crypto.signers.SM2Signer.getZ:-1 (6,284 samples, 0.14%)</title><rect x="11.9" y="325" width="1.6" height="15.0" fill="rgb(254,206,23)" rx="2" ry="2" />
+<text  x="14.88" y="335.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECCurve.normalizeAll:-1 (634,419 samples, 13.78%)</title><rect x="15.6" y="245" width="162.6" height="15.0" fill="rgb(243,150,45)" rx="2" ry="2" />
+<text  x="18.65" y="255.5" >org.bouncycastle.mat..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat.toBigInteger:-1 (1,048 samples, 0.02%)</title><rect x="1189.1" y="309" width="0.3" height="15.0" fill="rgb(213,92,12)" rx="2" ry="2" />
+<text  x="1192.10" y="319.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:233 (2,096 samples, 0.05%)</title><rect x="1184.5" y="197" width="0.6" height="15.0" fill="rgb(236,137,39)" rx="2" ry="2" />
+<text  x="1187.53" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECCurve.precompute:-1 (2,886,825 samples, 62.69%)</title><rect x="15.4" y="277" width="739.7" height="15.0" fill="rgb(218,105,18)" rx="2" ry="2" />
+<text  x="18.38" y="287.5" >org.bouncycastle.math.ec.ECCurve.precompute:-1</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (90,664 samples, 1.97%)</title><rect x="1074.3" y="261" width="23.2" height="15.0" fill="rgb(231,54,42)" rx="2" ry="2" />
+<text  x="1077.29" y="271.5" >o..</text>
+</g>
+<g >
+<title>java.util.concurrent.CopyOnWriteArrayList.iterator:1024 (477 samples, 0.01%)</title><rect x="1189.4" y="549" width="0.1" height="15.0" fill="rgb(237,112,46)" rx="2" ry="2" />
+<text  x="1192.36" y="559.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (632,746 samples, 13.74%)</title><rect x="359.2" y="213" width="162.2" height="15.0" fill="rgb(222,196,28)" rx="2" ry="2" />
+<text  x="362.24" y="223.5" >org.bouncycastle.mat..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (109,012 samples, 2.37%)</title><rect x="1139.7" y="245" width="27.9" height="15.0" fill="rgb(219,55,21)" rx="2" ry="2" />
+<text  x="1142.67" y="255.5" >o..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1227 (5,776 samples, 0.13%)</title><rect x="973.6" y="261" width="1.5" height="15.0" fill="rgb(251,72,9)" rx="2" ry="2" />
+<text  x="976.62" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (3,138 samples, 0.07%)</title><rect x="955.0" y="261" width="0.8" height="15.0" fill="rgb(233,115,44)" rx="2" ry="2" />
+<text  x="957.98" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.multiplyToLen:1736 (524 samples, 0.01%)</title><rect x="975.4" y="293" width="0.1" height="15.0" fill="rgb(213,147,18)" rx="2" ry="2" />
+<text  x="978.37" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.fromBigInteger:-1 (37,166 samples, 0.81%)</title><rect x="86.8" y="69" width="9.5" height="15.0" fill="rgb(233,204,35)" rx="2" ry="2" />
+<text  x="89.81" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toByteArray:4119 (526 samples, 0.01%)</title><rect x="977.3" y="277" width="0.1" height="15.0" fill="rgb(219,92,48)" rx="2" ry="2" />
+<text  x="980.25" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRight:3375 (2,632 samples, 0.06%)</title><rect x="1182.4" y="277" width="0.7" height="15.0" fill="rgb(225,210,48)" rx="2" ry="2" />
+<text  x="1185.38" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (162,893 samples, 3.54%)</title><rect x="1013.4" y="261" width="41.7" height="15.0" fill="rgb(232,84,11)" rx="2" ry="2" />
+<text  x="1016.36" y="271.5" >org..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.square:-1 (1,060 samples, 0.02%)</title><rect x="979.0" y="197" width="0.3" height="15.0" fill="rgb(236,36,17)" rx="2" ry="2" />
+<text  x="982.00" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.isValidPartial:-1 (7,352 samples, 0.16%)</title><rect x="13.5" y="277" width="1.9" height="15.0" fill="rgb(237,175,52)" rx="2" ry="2" />
+<text  x="16.49" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (3,668 samples, 0.08%)</title><rect x="178.5" y="197" width="0.9" height="15.0" fill="rgb(224,90,24)" rx="2" ry="2" />
+<text  x="181.47" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.multiply:-1 (3,660 samples, 0.08%)</title><rect x="955.0" y="277" width="0.9" height="15.0" fill="rgb(239,149,16)" rx="2" ry="2" />
+<text  x="957.98" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainder:2343 (9,444 samples, 0.21%)</title><rect x="973.0" y="309" width="2.4" height="15.0" fill="rgb(211,4,23)" rx="2" ry="2" />
+<text  x="975.95" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.FixedPointUtil$1.precompute:-1 (2,886,825 samples, 62.69%)</title><rect x="15.4" y="261" width="739.7" height="15.0" fill="rgb(239,43,49)" rx="2" ry="2" />
+<text  x="18.38" y="271.5" >org.bouncycastle.math.ec.FixedPointUtil$1.precompute:-1</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.fromBigInteger:-1 (36,623 samples, 0.80%)</title><rect x="963.3" y="213" width="9.4" height="15.0" fill="rgb(224,82,51)" rx="2" ry="2" />
+<text  x="966.30" y="223.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (133,116 samples, 2.89%)</title><rect x="21.8" y="165" width="34.1" height="15.0" fill="rgb(247,202,9)" rx="2" ry="2" />
+<text  x="24.82" y="175.5" >or..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.fromBigInteger:-1 (3,134 samples, 0.07%)</title><rect x="962.4" y="133" width="0.8" height="15.0" fill="rgb(216,85,53)" rx="2" ry="2" />
+<text  x="965.36" y="143.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (1,574 samples, 0.03%)</title><rect x="972.3" y="197" width="0.4" height="15.0" fill="rgb(219,193,29)" rx="2" ry="2" />
+<text  x="975.28" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (57,667 samples, 1.25%)</title><rect x="1167.6" y="261" width="14.8" height="15.0" fill="rgb(219,24,0)" rx="2" ry="2" />
+<text  x="1170.61" y="271.5" ></text>
+</g>
+<g >
+<title>java.lang.invoke.DirectMethodHandle$Holder.invokeStatic:-1 (610 samples, 0.01%)</title><rect x="1189.5" y="517" width="0.2" height="15.0" fill="rgb(230,174,50)" rx="2" ry="2" />
+<text  x="1192.51" y="527.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.add:-1 (388,213 samples, 8.43%)</title><rect x="771.9" y="277" width="99.4" height="15.0" fill="rgb(218,64,16)" rx="2" ry="2" />
+<text  x="774.86" y="287.5" >org.bouncyca..</text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3793 (1,046 samples, 0.02%)</title><rect x="954.0" y="245" width="0.3" height="15.0" fill="rgb(222,81,33)" rx="2" ry="2" />
+<text  x="957.04" y="255.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toByteArray:4119 (528 samples, 0.01%)</title><rect x="13.4" y="261" width="0.1" height="15.0" fill="rgb(251,35,26)" rx="2" ry="2" />
+<text  x="16.36" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (22,542 samples, 0.49%)</title><rect x="172.4" y="181" width="5.8" height="15.0" fill="rgb(208,138,41)" rx="2" ry="2" />
+<text  x="175.43" y="191.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3745 (1,050 samples, 0.02%)</title><rect x="976.8" y="277" width="0.3" height="15.0" fill="rgb(248,28,10)" rx="2" ry="2" />
+<text  x="979.85" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.createScaledPoint:-1 (1,568 samples, 0.03%)</title><rect x="1183.1" y="293" width="0.4" height="15.0" fill="rgb(253,166,0)" rx="2" ry="2" />
+<text  x="1186.06" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint$AbstractFp.satisfiesCurveEquation:-1 (7,352 samples, 0.16%)</title><rect x="13.5" y="213" width="1.9" height="15.0" fill="rgb(222,150,3)" rx="2" ry="2" />
+<text  x="16.49" y="223.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.fromBigInteger:-1 (40,836 samples, 0.89%)</title><rect x="85.9" y="101" width="10.4" height="15.0" fill="rgb(234,107,52)" rx="2" ry="2" />
+<text  x="88.87" y="111.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.random:-1 (1,570 samples, 0.03%)</title><rect x="956.3" y="277" width="0.4" height="15.0" fill="rgb(217,223,11)" rx="2" ry="2" />
+<text  x="959.32" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (522 samples, 0.01%)</title><rect x="955.9" y="277" width="0.1" height="15.0" fill="rgb(206,156,54)" rx="2" ry="2" />
+<text  x="958.91" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat.fromBigInteger:-1 (2,632 samples, 0.06%)</title><rect x="1182.4" y="293" width="0.7" height="15.0" fill="rgb(224,214,44)" rx="2" ry="2" />
+<text  x="1185.38" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (44,574 samples, 0.97%)</title><rect x="144.4" y="165" width="11.4" height="15.0" fill="rgb(235,185,36)" rx="2" ry="2" />
+<text  x="147.37" y="175.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Mod.checkedModOddInverse:-1 (3,668 samples, 0.08%)</title><rect x="17.0" y="165" width="0.9" height="15.0" fill="rgb(218,104,41)" rx="2" ry="2" />
+<text  x="19.99" y="175.5" ></text>
+</g>
+<g >
+<title>java.lang.reflect.ReflectAccess.copyConstructor:155 (1,048 samples, 0.02%)</title><rect x="10.1" y="277" width="0.3" height="15.0" fill="rgb(216,182,21)" rx="2" ry="2" />
+<text  x="13.13" y="287.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.AbstractDrbg.engineNextBytes:394 (1,048 samples, 0.02%)</title><rect x="976.0" y="229" width="0.3" height="15.0" fill="rgb(208,106,35)" rx="2" ry="2" />
+<text  x="979.04" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.getInitialZCoords:-1 (1,044 samples, 0.02%)</title><rect x="954.7" y="213" width="0.3" height="15.0" fill="rgb(221,27,1)" rx="2" ry="2" />
+<text  x="957.71" y="223.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.ReflectionFactory.copyConstructor:388 (1,048 samples, 0.02%)</title><rect x="10.1" y="293" width="0.3" height="15.0" fill="rgb(224,156,0)" rx="2" ry="2" />
+<text  x="13.13" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.createScaledPoint:-1 (260,822 samples, 5.66%)</title><rect x="77.4" y="197" width="66.8" height="15.0" fill="rgb(234,212,42)" rx="2" ry="2" />
+<text  x="80.41" y="207.5" >org.bou..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (109,012 samples, 2.37%)</title><rect x="1139.7" y="261" width="27.9" height="15.0" fill="rgb(237,60,12)" rx="2" ry="2" />
+<text  x="1142.67" y="271.5" >o..</text>
+</g>
+<g >
+<title>org.bouncycastle.asn1.ASN1Integer.&lt;init&gt;:-1 (526 samples, 0.01%)</title><rect x="977.3" y="293" width="0.1" height="15.0" fill="rgb(208,184,22)" rx="2" ry="2" />
+<text  x="980.25" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.jcajce.provider.asymmetric.ec.GMSignatureSpi$sha256WithSM2.&lt;init&gt;:-1 (4,194 samples, 0.09%)</title><rect x="10.4" y="261" width="1.1" height="15.0" fill="rgb(254,105,8)" rx="2" ry="2" />
+<text  x="13.40" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (26,202 samples, 0.57%)</title><rect x="864.6" y="261" width="6.7" height="15.0" fill="rgb(217,216,16)" rx="2" ry="2" />
+<text  x="867.62" y="271.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.FutureTask.run:264 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="597" width="1179.3" height="15.0" fill="rgb(238,225,37)" rx="2" ry="2" />
+<text  x="13.13" y="607.5" >java.util.concurrent.FutureTask.run:264</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.fromBigInteger:-1 (3,134 samples, 0.07%)</title><rect x="962.4" y="149" width="0.8" height="15.0" fill="rgb(219,77,24)" rx="2" ry="2" />
+<text  x="965.36" y="159.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.periodicTask:439 (1,159 samples, 0.03%)</title><rect x="1189.4" y="597" width="0.3" height="15.0" fill="rgb(243,181,37)" rx="2" ry="2" />
+<text  x="1192.36" y="607.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.multiply:-1 (4,720 samples, 0.10%)</title><rect x="977.8" y="197" width="1.2" height="15.0" fill="rgb(229,108,3)" rx="2" ry="2" />
+<text  x="980.79" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (82,252 samples, 1.79%)</title><rect x="843.5" y="261" width="21.1" height="15.0" fill="rgb(208,38,4)" rx="2" ry="2" />
+<text  x="846.54" y="271.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3434 (542 samples, 0.01%)</title><rect x="961.4" y="197" width="0.2" height="15.0" fill="rgb(217,67,27)" rx="2" ry="2" />
+<text  x="964.42" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (25,668 samples, 0.56%)</title><rect x="155.8" y="181" width="6.6" height="15.0" fill="rgb(215,140,12)" rx="2" ry="2" />
+<text  x="158.79" y="191.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:224 (522 samples, 0.01%)</title><rect x="1184.3" y="197" width="0.1" height="15.0" fill="rgb(236,195,5)" rx="2" ry="2" />
+<text  x="1187.26" y="207.5" ></text>
+</g>
+<g >
+<title>java.security.Provider.newInstanceUtil:153 (1,048 samples, 0.02%)</title><rect x="10.1" y="325" width="0.3" height="15.0" fill="rgb(218,31,29)" rx="2" ry="2" />
+<text  x="13.13" y="335.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.AbstractDrbg.engineNextBytes:394 (3,142 samples, 0.07%)</title><rect x="1184.3" y="213" width="0.8" height="15.0" fill="rgb(248,77,3)" rx="2" ry="2" />
+<text  x="1187.26" y="223.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.normalize:-1 (393,376 samples, 8.54%)</title><rect x="77.4" y="213" width="100.8" height="15.0" fill="rgb(218,65,45)" rx="2" ry="2" />
+<text  x="80.41" y="223.5" >org.bouncyca..</text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:233 (522 samples, 0.01%)</title><rect x="976.2" y="213" width="0.1" height="15.0" fill="rgb(240,112,16)" rx="2" ry="2" />
+<text  x="979.18" y="223.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECAlgorithms.implCheckResult:-1 (7,352 samples, 0.16%)</title><rect x="13.5" y="293" width="1.9" height="15.0" fill="rgb(211,228,30)" rx="2" ry="2" />
+<text  x="16.49" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (3,144 samples, 0.07%)</title><rect x="14.4" y="165" width="0.8" height="15.0" fill="rgb(241,4,49)" rx="2" ry="2" />
+<text  x="17.43" y="175.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:4102 (2,622 samples, 0.06%)</title><rect x="973.6" y="229" width="0.7" height="15.0" fill="rgb(247,183,47)" rx="2" ry="2" />
+<text  x="976.62" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.crypto.signers.StandardDSAEncoding.encodeValue:-1 (526 samples, 0.01%)</title><rect x="977.3" y="309" width="0.1" height="15.0" fill="rgb(223,47,7)" rx="2" ry="2" />
+<text  x="980.25" y="319.5" ></text>
+</g>
+<g >
+<title>org.sample.SM2Util.sign:36 (6,818 samples, 0.15%)</title><rect x="10.1" y="405" width="1.8" height="15.0" fill="rgb(235,158,54)" rx="2" ry="2" />
+<text  x="13.13" y="415.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.ThreadPoolExecutor$Worker.run:628 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="629" width="1179.3" height="15.0" fill="rgb(250,7,14)" rx="2" ry="2" />
+<text  x="13.13" y="639.5" >java.util.concurrent.ThreadPoolExecutor$Worker.run:628</text>
+</g>
+<g >
+<title>org.bouncycastle.util.BigIntegers.modOddInverse:-1 (12,052 samples, 0.26%)</title><rect x="1186.3" y="325" width="3.1" height="15.0" fill="rgb(213,103,28)" rx="2" ry="2" />
+<text  x="1189.28" y="335.5" ></text>
+</g>
+<g >
+<title>java.util.Hashtable.put:492 (522 samples, 0.01%)</title><rect x="977.4" y="229" width="0.1" height="15.0" fill="rgb(218,180,14)" rx="2" ry="2" />
+<text  x="980.39" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.getInitialZCoords:-1 (522 samples, 0.01%)</title><rect x="1183.1" y="213" width="0.1" height="15.0" fill="rgb(254,34,38)" rx="2" ry="2" />
+<text  x="1186.06" y="223.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (2,614 samples, 0.06%)</title><rect x="180.2" y="213" width="0.7" height="15.0" fill="rgb(237,165,7)" rx="2" ry="2" />
+<text  x="183.22" y="223.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (1,568 samples, 0.03%)</title><rect x="957.4" y="277" width="0.4" height="15.0" fill="rgb(241,72,24)" rx="2" ry="2" />
+<text  x="960.39" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.inv:-1 (3,668 samples, 0.08%)</title><rect x="17.0" y="181" width="0.9" height="15.0" fill="rgb(222,95,15)" rx="2" ry="2" />
+<text  x="19.99" y="191.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1511 (2,622 samples, 0.06%)</title><rect x="973.6" y="245" width="0.7" height="15.0" fill="rgb(235,49,30)" rx="2" ry="2" />
+<text  x="976.62" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (1,052 samples, 0.02%)</title><rect x="13.8" y="181" width="0.2" height="15.0" fill="rgb(207,22,40)" rx="2" ry="2" />
+<text  x="16.76" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (3,144 samples, 0.07%)</title><rect x="14.4" y="181" width="0.8" height="15.0" fill="rgb(220,221,18)" rx="2" ry="2" />
+<text  x="17.43" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECCurve$AbstractFp.&lt;init&gt;:-1 (524 samples, 0.01%)</title><rect x="960.3" y="229" width="0.2" height="15.0" fill="rgb(246,47,33)" rx="2" ry="2" />
+<text  x="963.35" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.toBigInteger:-1 (3,140 samples, 0.07%)</title><rect x="11.9" y="261" width="0.8" height="15.0" fill="rgb(245,153,3)" rx="2" ry="2" />
+<text  x="14.88" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.HashDrbg.generateAlgorithm:231 (522 samples, 0.01%)</title><rect x="976.0" y="213" width="0.2" height="15.0" fill="rgb(245,172,5)" rx="2" ry="2" />
+<text  x="979.04" y="223.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (65,500 samples, 1.42%)</title><rect x="937.3" y="261" width="16.7" height="15.0" fill="rgb(241,50,1)" rx="2" ry="2" />
+<text  x="940.26" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:236 (5,242 samples, 0.11%)</title><rect x="10.1" y="357" width="1.4" height="15.0" fill="rgb(224,10,14)" rx="2" ry="2" />
+<text  x="13.13" y="367.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.normalize:-1 (13,084 samples, 0.28%)</title><rect x="954.4" y="325" width="3.4" height="15.0" fill="rgb(239,42,45)" rx="2" ry="2" />
+<text  x="957.44" y="335.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine.doPeriodic:183 (1,159 samples, 0.03%)</title><rect x="1189.4" y="581" width="0.3" height="15.0" fill="rgb(242,223,50)" rx="2" ry="2" />
+<text  x="1192.36" y="591.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.add:-1 (8,390 samples, 0.18%)</title><rect x="769.7" y="293" width="2.2" height="15.0" fill="rgb(231,184,25)" rx="2" ry="2" />
+<text  x="772.71" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.inv:-1 (2,098 samples, 0.05%)</title><rect x="1185.1" y="293" width="0.5" height="15.0" fill="rgb(206,35,30)" rx="2" ry="2" />
+<text  x="1188.07" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.asn1.ASN1Sequence.&lt;init&gt;:-1 (522 samples, 0.01%)</title><rect x="977.1" y="293" width="0.2" height="15.0" fill="rgb(240,169,9)" rx="2" ry="2" />
+<text  x="980.12" y="303.5" ></text>
+</g>
+<g >
+<title>java.security.MessageDigest$Delegate.engineDigest:639 (522 samples, 0.01%)</title><rect x="1184.3" y="165" width="0.1" height="15.0" fill="rgb(223,168,21)" rx="2" ry="2" />
+<text  x="1187.26" y="175.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.mod:2699 (9,444 samples, 0.21%)</title><rect x="973.0" y="325" width="2.4" height="15.0" fill="rgb(217,190,34)" rx="2" ry="2" />
+<text  x="975.95" y="335.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3405 (2,090 samples, 0.05%)</title><rect x="960.9" y="197" width="0.5" height="15.0" fill="rgb(230,138,46)" rx="2" ry="2" />
+<text  x="963.88" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint$AbstractFp.&lt;init&gt;:-1 (522 samples, 0.01%)</title><rect x="1183.1" y="245" width="0.1" height="15.0" fill="rgb(232,55,47)" rx="2" ry="2" />
+<text  x="1186.06" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (227,404 samples, 4.94%)</title><rect x="626.5" y="213" width="58.2" height="15.0" fill="rgb(234,220,41)" rx="2" ry="2" />
+<text  x="629.47" y="223.5" >org.bo..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECCurve$Fp.&lt;init&gt;:-1 (6,826 samples, 0.15%)</title><rect x="959.8" y="261" width="1.8" height="15.0" fill="rgb(237,35,37)" rx="2" ry="2" />
+<text  x="962.81" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.twice:-1 (6,812 samples, 0.15%)</title><rect x="713.8" y="229" width="1.8" height="15.0" fill="rgb(212,190,53)" rx="2" ry="2" />
+<text  x="716.84" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (116,850 samples, 2.54%)</title><rect x="1109.7" y="245" width="30.0" height="15.0" fill="rgb(221,225,10)" rx="2" ry="2" />
+<text  x="1112.73" y="255.5" >or..</text>
+</g>
+<g >
+<title>java.math.BigInteger.valueOf:1176 (522 samples, 0.01%)</title><rect x="976.0" y="197" width="0.2" height="15.0" fill="rgb(224,154,22)" rx="2" ry="2" />
+<text  x="979.04" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (3,668 samples, 0.08%)</title><rect x="178.5" y="213" width="0.9" height="15.0" fill="rgb(252,220,17)" rx="2" ry="2" />
+<text  x="181.47" y="223.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.invert:-1 (4,190 samples, 0.09%)</title><rect x="17.0" y="197" width="1.1" height="15.0" fill="rgb(231,9,44)" rx="2" ry="2" />
+<text  x="19.99" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (37,166 samples, 0.81%)</title><rect x="86.8" y="37" width="9.5" height="15.0" fill="rgb(237,200,38)" rx="2" ry="2" />
+<text  x="89.81" y="47.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.jcajce.provider.asymmetric.util.EC5Util.convertPoint:-1 (43,425 samples, 0.94%)</title><rect x="961.6" y="293" width="11.1" height="15.0" fill="rgb(209,97,5)" rx="2" ry="2" />
+<text  x="964.56" y="303.5" ></text>
+</g>
+<g >
+<title>java.lang.reflect.Constructor.copy:150 (1,048 samples, 0.02%)</title><rect x="10.1" y="261" width="0.3" height="15.0" fill="rgb(243,223,0)" rx="2" ry="2" />
+<text  x="13.13" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Mod.modOddInverse:-1 (2,098 samples, 0.05%)</title><rect x="1185.1" y="261" width="0.5" height="15.0" fill="rgb(218,4,40)" rx="2" ry="2" />
+<text  x="1188.07" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (83,827 samples, 1.82%)</title><rect x="55.9" y="181" width="21.5" height="15.0" fill="rgb(237,148,34)" rx="2" ry="2" />
+<text  x="58.93" y="191.5" >o..</text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3405 (1,054 samples, 0.02%)</title><rect x="1182.4" y="261" width="0.3" height="15.0" fill="rgb(236,60,29)" rx="2" ry="2" />
+<text  x="1185.38" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.timesPow2:-1 (1,634,849 samples, 35.50%)</title><rect x="181.0" y="245" width="418.9" height="15.0" fill="rgb(221,122,3)" rx="2" ry="2" />
+<text  x="184.02" y="255.5" >org.bouncycastle.math.ec.ECPoint.timesPow2:-1</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.fromBigInteger:-1 (522 samples, 0.01%)</title><rect x="954.8" y="197" width="0.2" height="15.0" fill="rgb(247,78,33)" rx="2" ry="2" />
+<text  x="957.84" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.normalize:-1 (2,616 samples, 0.06%)</title><rect x="1183.1" y="309" width="0.6" height="15.0" fill="rgb(242,106,45)" rx="2" ry="2" />
+<text  x="1186.06" y="319.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:432 (2,092 samples, 0.05%)</title><rect x="12.2" y="245" width="0.5" height="15.0" fill="rgb(252,26,48)" rx="2" ry="2" />
+<text  x="15.15" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve$1.lookup:-1 (57,130 samples, 1.24%)</title><rect x="755.1" y="293" width="14.6" height="15.0" fill="rgb(248,71,37)" rx="2" ry="2" />
+<text  x="758.07" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.crypto.digests.SHA256Digest.&lt;init&gt;:-1 (3,148 samples, 0.07%)</title><rect x="10.7" y="245" width="0.8" height="15.0" fill="rgb(232,193,22)" rx="2" ry="2" />
+<text  x="13.67" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.twicePlus:-1 (708,351 samples, 15.38%)</title><rect x="1000.9" y="293" width="181.5" height="15.0" fill="rgb(225,161,39)" rx="2" ry="2" />
+<text  x="1003.88" y="303.5" >org.bouncycastle.math.e..</text>
+</g>
+<g >
+<title>org.bouncycastle.crypto.signers.StandardDSAEncoding.encode:-1 (3,148 samples, 0.07%)</title><rect x="976.6" y="325" width="0.8" height="15.0" fill="rgb(238,197,54)" rx="2" ry="2" />
+<text  x="979.58" y="335.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.randomMult:-1 (5,236 samples, 0.11%)</title><rect x="1183.7" y="293" width="1.4" height="15.0" fill="rgb(245,177,25)" rx="2" ry="2" />
+<text  x="1186.73" y="303.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.&lt;init&gt;:-1 (37,166 samples, 0.81%)</title><rect x="86.8" y="85" width="9.5" height="15.0" fill="rgb(206,183,29)" rx="2" ry="2" />
+<text  x="89.81" y="95.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.util.InputStreamDrainer.run:77 (1,016 samples, 0.02%)</title><rect x="1189.7" y="645" width="0.3" height="15.0" fill="rgb(254,203,15)" rx="2" ry="2" />
+<text  x="1192.74" y="655.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.crypto.signers.RandomDSAKCalculator.nextK:-1 (2,094 samples, 0.05%)</title><rect x="975.8" y="325" width="0.5" height="15.0" fill="rgb(250,99,48)" rx="2" ry="2" />
+<text  x="978.78" y="335.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (89,029 samples, 1.93%)</title><rect x="820.7" y="261" width="22.8" height="15.0" fill="rgb(234,198,50)" rx="2" ry="2" />
+<text  x="823.73" y="271.5" >o..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (162,893 samples, 3.54%)</title><rect x="1013.4" y="245" width="41.7" height="15.0" fill="rgb(211,76,13)" rx="2" ry="2" />
+<text  x="1016.36" y="255.5" >org..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.multiply:-1 (155,627 samples, 3.38%)</title><rect x="780.9" y="261" width="39.8" height="15.0" fill="rgb(229,88,19)" rx="2" ry="2" />
+<text  x="783.86" y="271.5" >org..</text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3434 (3,674 samples, 0.08%)</title><rect x="1187.9" y="277" width="0.9" height="15.0" fill="rgb(223,202,4)" rx="2" ry="2" />
+<text  x="1190.89" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.subtract:1519 (1,046 samples, 0.02%)</title><rect x="975.5" y="325" width="0.3" height="15.0" fill="rgb(253,180,47)" rx="2" ry="2" />
+<text  x="978.51" y="335.5" ></text>
+</g>
+<g >
+<title>java.security.Signature.initSign:634 (3,749,740 samples, 81.42%)</title><rect x="11.9" y="389" width="960.8" height="15.0" fill="rgb(218,205,1)" rx="2" ry="2" />
+<text  x="14.88" y="399.5" >java.security.Signature.initSign:634</text>
+</g>
+<g >
+<title>java.io.ByteArrayOutputStream.toByteArray:211 (1,050 samples, 0.02%)</title><rect x="976.8" y="293" width="0.3" height="15.0" fill="rgb(224,217,33)" rx="2" ry="2" />
+<text  x="979.85" y="303.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.NativeMethodAccessorImpl.invoke:62 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="485" width="1179.3" height="15.0" fill="rgb(244,107,15)" rx="2" ry="2" />
+<text  x="13.13" y="495.5" >jdk.internal.reflect.NativeMethodAccessorImpl.invoke:62</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (129,885 samples, 2.82%)</title><rect x="904.0" y="245" width="33.3" height="15.0" fill="rgb(237,10,42)" rx="2" ry="2" />
+<text  x="906.98" y="255.5" >or..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.FixedPointUtil.precompute:-1 (2,886,825 samples, 62.69%)</title><rect x="15.4" y="293" width="739.7" height="15.0" fill="rgb(215,188,26)" rx="2" ry="2" />
+<text  x="18.38" y="303.5" >org.bouncycastle.math.ec.FixedPointUtil.precompute:-1</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.AbstractECMultiplier.checkResult:-1 (7,358 samples, 0.16%)</title><rect x="977.4" y="309" width="1.9" height="15.0" fill="rgb(209,180,17)" rx="2" ry="2" />
+<text  x="980.39" y="319.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3434 (526 samples, 0.01%)</title><rect x="954.3" y="261" width="0.1" height="15.0" fill="rgb(218,31,7)" rx="2" ry="2" />
+<text  x="957.31" y="271.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (1,048 samples, 0.02%)</title><rect x="979.0" y="181" width="0.3" height="15.0" fill="rgb(206,177,23)" rx="2" ry="2" />
+<text  x="982.00" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.twicePlus:-1 (710,988 samples, 15.44%)</title><rect x="771.9" y="293" width="182.1" height="15.0" fill="rgb(249,98,29)" rx="2" ry="2" />
+<text  x="774.86" y="303.5" >org.bouncycastle.math.e..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.inv:-1 (2,096 samples, 0.05%)</title><rect x="956.7" y="293" width="0.6" height="15.0" fill="rgb(254,53,45)" rx="2" ry="2" />
+<text  x="959.72" y="303.5" ></text>
+</g>
+<g >
+<title>java.lang.invoke.Invokers$Holder.linkToTargetMethod:-1 (610 samples, 0.01%)</title><rect x="1189.5" y="533" width="0.2" height="15.0" fill="rgb(229,84,37)" rx="2" ry="2" />
+<text  x="1192.51" y="543.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.add:-1 (10,464 samples, 0.23%)</title><rect x="178.2" y="229" width="2.7" height="15.0" fill="rgb(212,28,20)" rx="2" ry="2" />
+<text  x="181.20" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.jcajce.provider.asymmetric.util.ECUtil.generatePrivateKeyParameter:-1 (58,113 samples, 1.26%)</title><rect x="957.8" y="341" width="14.9" height="15.0" fill="rgb(244,12,11)" rx="2" ry="2" />
+<text  x="960.79" y="351.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.jcajce.provider.asymmetric.ec.GMSignatureSpi.engineSign:-1 (845,638 samples, 18.36%)</title><rect x="972.7" y="357" width="216.7" height="15.0" fill="rgb(235,176,13)" rx="2" ry="2" />
+<text  x="975.68" y="367.5" >org.bouncycastle.jcajce.prov..</text>
+</g>
+<g >
+<title>java.lang.Thread.run:834 (4,603,355 samples, 99.96%)</title><rect x="10.1" y="645" width="1179.6" height="15.0" fill="rgb(246,182,39)" rx="2" ry="2" />
+<text  x="13.13" y="655.5" >java.lang.Thread.run:834</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Curve.createRawPoint:-1 (73,846 samples, 1.60%)</title><rect x="77.4" y="181" width="18.9" height="15.0" fill="rgb(236,51,53)" rx="2" ry="2" />
+<text  x="80.41" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint$1.precompute:-1 (7,352 samples, 0.16%)</title><rect x="13.5" y="229" width="1.9" height="15.0" fill="rgb(215,72,29)" rx="2" ry="2" />
+<text  x="16.49" y="239.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.remainderKnuth:2351 (1,046 samples, 0.02%)</title><rect x="973.0" y="293" width="0.2" height="15.0" fill="rgb(239,63,1)" rx="2" ry="2" />
+<text  x="975.95" y="303.5" ></text>
+</g>
+<g >
+<title>java.security.MessageDigest.digest:385 (522 samples, 0.01%)</title><rect x="1184.3" y="181" width="0.1" height="15.0" fill="rgb(207,102,5)" rx="2" ry="2" />
+<text  x="1187.26" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.square:-1 (61,788 samples, 1.34%)</title><rect x="162.4" y="197" width="15.8" height="15.0" fill="rgb(239,118,52)" rx="2" ry="2" />
+<text  x="165.37" y="207.5" ></text>
+</g>
+<g >
+<title>java.security.SecureRandom.nextBytes:751 (1,048 samples, 0.02%)</title><rect x="976.0" y="277" width="0.3" height="15.0" fill="rgb(246,100,35)" rx="2" ry="2" />
+<text  x="979.04" y="287.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Field.square:-1 (2,098 samples, 0.05%)</title><rect x="714.5" y="213" width="0.6" height="15.0" fill="rgb(244,183,20)" rx="2" ry="2" />
+<text  x="717.52" y="223.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (134,139 samples, 2.91%)</title><rect x="715.6" y="229" width="34.4" height="15.0" fill="rgb(217,71,32)" rx="2" ry="2" />
+<text  x="718.59" y="239.5" >or..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECCurve$Fp.fromBigInteger:-1 (1,572 samples, 0.03%)</title><rect x="960.5" y="229" width="0.4" height="15.0" fill="rgb(249,164,10)" rx="2" ry="2" />
+<text  x="963.48" y="239.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.add:-1 (1,048 samples, 0.02%)</title><rect x="977.5" y="197" width="0.3" height="15.0" fill="rgb(242,142,18)" rx="2" ry="2" />
+<text  x="980.52" y="207.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Mod.modOddInverse:-1 (3,668 samples, 0.08%)</title><rect x="17.0" y="149" width="0.9" height="15.0" fill="rgb(238,85,12)" rx="2" ry="2" />
+<text  x="19.99" y="159.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.NativeMethodAccessorImpl.invoke0:-1 (4,602,196 samples, 99.93%)</title><rect x="10.1" y="469" width="1179.3" height="15.0" fill="rgb(251,55,2)" rx="2" ry="2" />
+<text  x="13.13" y="479.5" >jdk.internal.reflect.NativeMethodAccessorImpl.invoke0:-1</text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.createExt:-1 (632,746 samples, 13.74%)</title><rect x="359.2" y="197" width="162.2" height="15.0" fill="rgb(251,17,6)" rx="2" ry="2" />
+<text  x="362.24" y="207.5" >org.bouncycastle.mat..</text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint$AbstractFp.subtract:-1 (10,986 samples, 0.24%)</title><rect x="178.2" y="245" width="2.8" height="15.0" fill="rgb(205,63,15)" rx="2" ry="2" />
+<text  x="181.20" y="255.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.asn1.DERSequence.&lt;init&gt;:-1 (522 samples, 0.01%)</title><rect x="977.1" y="309" width="0.2" height="15.0" fill="rgb(231,12,54)" rx="2" ry="2" />
+<text  x="980.12" y="319.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.toBigInteger:-1 (522 samples, 0.01%)</title><rect x="1186.1" y="325" width="0.2" height="15.0" fill="rgb(231,202,6)" rx="2" ry="2" />
+<text  x="1189.14" y="335.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECPoint.implIsValid:-1 (7,358 samples, 0.16%)</title><rect x="977.4" y="261" width="1.9" height="15.0" fill="rgb(216,142,40)" rx="2" ry="2" />
+<text  x="980.39" y="271.5" ></text>
+</g>
+<g >
+<title>sun.security.provider.DigestBase.engineDigest:187 (522 samples, 0.01%)</title><rect x="1184.3" y="149" width="0.1" height="15.0" fill="rgb(238,121,20)" rx="2" ry="2" />
+<text  x="1187.26" y="159.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.raw.Nat256.create:-1 (1,052 samples, 0.02%)</title><rect x="13.5" y="181" width="0.3" height="15.0" fill="rgb(217,226,6)" rx="2" ry="2" />
+<text  x="16.49" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.ECCurve$Fp.&lt;init&gt;:-1 (6,826 samples, 0.15%)</title><rect x="959.8" y="245" width="1.8" height="15.0" fill="rgb(218,96,42)" rx="2" ry="2" />
+<text  x="962.81" y="255.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.shiftRightImpl:3405 (13,092 samples, 0.28%)</title><rect x="963.3" y="181" width="3.4" height="15.0" fill="rgb(207,150,31)" rx="2" ry="2" />
+<text  x="966.30" y="191.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1FieldElement.&lt;init&gt;:-1 (522 samples, 0.01%)</title><rect x="1183.1" y="181" width="0.1" height="15.0" fill="rgb(243,137,2)" rx="2" ry="2" />
+<text  x="1186.06" y="191.5" ></text>
+</g>
+<g >
+<title>sun.security.jca.GetInstance.getInstance:218 (5,770 samples, 0.13%)</title><rect x="10.1" y="373" width="1.5" height="15.0" fill="rgb(247,183,26)" rx="2" ry="2" />
+<text  x="13.13" y="383.5" ></text>
+</g>
+<g >
+<title>org.bouncycastle.math.ec.custom.gm.SM2P256V1Point.add:-1 (18,856 samples, 0.41%)</title><rect x="996.0" y="293" width="4.9" height="15.0" fill="rgb(234,103,5)" rx="2" ry="2" />
+<text  x="999.05" y="303.5" ></text>
+</g>
+</g>
+</svg>

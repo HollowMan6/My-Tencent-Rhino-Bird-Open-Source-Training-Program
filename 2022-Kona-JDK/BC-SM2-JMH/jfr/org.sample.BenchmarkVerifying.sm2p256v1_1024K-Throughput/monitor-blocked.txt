@@ -1,0 +1,2 @@
+java.lang.Thread.run:834;jdk.jfr.internal.PlatformRecorder$$Lambda$87.995536478.run:-1;jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:386;jdk.jfr.internal.PlatformRecorder.periodicTask:441;jdk.jfr.internal.PlatformRecorder.takeNap:448;java.lang.Object.wait:-1 53570
+
