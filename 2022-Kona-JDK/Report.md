@@ -4,6 +4,8 @@
 ## Task 1
 [Requirement](https://docs.qq.com/doc/DUVpWUUVpVVVySVNw)
 
+https://github.com/openjdk/jdk/pull/9541
+
 ## Task 2
 [Requirement](https://docs.qq.com/doc/DUXhGSXBHZG11eUJ0)
 
@@ -15,13 +17,15 @@ The result clearly shows that `secp256r1` has a better performance than `secp256
 
 [Result](Task2/README.md)
 
-Further investigation shows that before `secp256k1` was removed from JDK, all the curves seem to be realized by C instead of Java. https://github.com/openjdk/jdk/blob/jdk-11+28/src/jdk.crypto.ec/share/native/libsunec/impl/oid.c#L95
+Further investigation shows that before `secp256k1` was removed from JDK, all the curves seem to be realized by C using the OS library instead of Java. https://github.com/openjdk/jdk/blob/jdk-11+28/src/jdk.crypto.ec/share/native/libsunec/impl/oid.c#L95
 
 [JDK-8238911](https://bugs.openjdk.org/browse/JDK-8238911) in 2020 reported the weaknesses in the implementation of the native library EC code make it necessary to remove support for future releases. The most common EC curves (`secp256r1`, `secp384r1`, and `secp521r1`) had been re-implemented in Java in the SunEC JCE provider.
 
-Our flame graph also some kind confirms this, as you can see [here](Task2/README.md#cpu), the Java Flight Recorder (JFR) can record the `secp256r1` methods calling stacks, but it's not the case for `secp256k1`. So it's likely that `secp256r1` has a better performance than `secp256k1` for signing since it's fully realized in Java and reduces the calling costs for implementation in another language. If they are both realized in Java, I guess there should be no difference and even `secp256k1` can be better in performance.
+After some communications with my mentor Johns Jiang, he tells me that [JDK-8181594](https://bugs.openjdk.org/browse/JDK-8181594) introduces the optimized finite field implementations in Java. Previously before that implementation was introduced, pure Java realization was really slow, the we use the OS library to realize all the curves so that the performance can be improved. But now, instead, with the help of that [optimized Java library](https://mail.openjdk.org/pipermail/core-libs-dev/2018-February/051729.html), Java realization takes the advantage and becomes the most efficient one, it's now even comparable with the pure C realization.
 
-As `secp256k1` has already been removed in JDK and `secp256r1` does have a better performance, so I guess here we will have no obvious further room for improvement.
+Our flame graph also some kind confirms this, as you can see [here](Task2/README.md#cpu), the Java Flight Recorder (JFR) can record the `secp256r1` methods calling stacks, but it's not the case for `secp256k1`. So it's likely that `secp256r1` has a better performance than `secp256k1` for signing since it's fully realized in Java and using that optimized library, thus reduces the calling costs for the OS library. If they are both realized in Java using the optimized method, I guess there should be no difference.
+
+As `secp256k1` has already been removed in JDK and now `secp256r1` does have a better performance, so I guess here we will have no obvious further room for improvement.
 
 ## Task 3
 As for Elliptic-curve based cryptography algorithms, the curve parameters are used to generate the keys.
@@ -40,7 +44,7 @@ https://github.com/HollowMan6/jdk/blob/c3e924641bb3a838f6abc496dd380ceb619df163/
 
 Then add the OID and names.
 
-The most important part is FieldGen. `FieldGen` is used to automatically generate optimized finite field implementations. https://github.com/HollowMan6/jdk/blob/c3e924641bb3a838f6abc496dd380ceb619df163/make/jdk/src/classes/build/tools/intpoly/FieldGen.java We need to generate two fields, `Integer Polynomial` (corresponds to parameter `p`) and `Order Field` (corresponds to parameter `n`).
+The most important part is FieldGen. `FieldGen` is used to automatically generate optimized finite field implementations, which is also the library I mentioned in Task 2 [JDK-8181594](https://bugs.openjdk.org/browse/JDK-8181594) for improving Java version's efficiency. https://github.com/HollowMan6/jdk/blob/c3e924641bb3a838f6abc496dd380ceb619df163/make/jdk/src/classes/build/tools/intpoly/FieldGen.java We need to generate two fields, `Integer Polynomial` (corresponds to parameter `p`) and `Order Field` (corresponds to parameter `n`).
 
 As:
 
@@ -74,7 +78,7 @@ So the `Integer Polynomial` shall fill just like that. We can copy other paramet
 
 The private keys in Hex can be printed directly with no special format.
 
-Since the public keys in Hex can be compressed, it does have a special format, that if it starts with `04`, then the keys are uncompressed and we just then concat the X and Y coordinate together. The compressed ones always start with `02` or `03` then only the X coordinate is needed. The `02` and `03` is determined by that, when Y coordinate is even, we use `02`, use `03` when odd. In addition, we have to also make sure that both X and Y coordinates are 64 in length for Hex.
+Since the public keys in Hex can be compressed, it does have a special format, that if it starts with `04`, then the keys are uncompressed and we just then concat the X and Y coordinate together. The compressed ones always start with `02` or `03`, and then only the X coordinate is needed. The `02` and `03` is determined by that, when Y coordinate is even, we use `02`, use `03` when odd. In addition, we have to also make sure that both X and Y coordinates are 64 in length for Hex.
 
 As the Bouncy Castle library has already fully realized the SM2, to ensure that the generated keys fit the `sm2p256v1`, I also use the generated keys for signing using SM3withSM2. The validity of the keys can be verified during the signature verification processes, during which we recover the `sm2p256v1` elliptic curve point from the Bouncy Castle library based on the Hex format public key. If we use keys generated based on other curves, like `secp256r1`, error will be thrown.
 
