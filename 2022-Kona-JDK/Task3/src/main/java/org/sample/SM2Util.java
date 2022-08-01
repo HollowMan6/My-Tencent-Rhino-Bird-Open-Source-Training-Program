@@ -75,7 +75,7 @@ public class SM2Util {
     private ECParameterSpec ecParameterSpec;
     private KeyFactory keyFactory;
 
-    private SM2Util() throws Exception {
+    public SM2Util() throws Exception {
         provider = new BouncyCastleProvider();
         parameters = GMNamedCurves.getByName("sm2p256v1");
         ecParameterSpec = new ECParameterSpec(parameters.getCurve(),
