@@ -130,6 +130,14 @@ JMH Performance test for compressed and uncompressed public key generation resul
 
 ```log
 Benchmark                                         Mode  Cnt       Score       Error  Units
-BenchmarkPublicKeys.sm2p256v1_compressed         thrpt   25  528253.893 ± 75444.508  ops/s
-BenchmarkPublicKeys.sm2p256v1_uncompressed       thrpt   25  236486.795 ± 33968.405  ops/s
+BenchmarkPublicKeys.sm2p256v1_compressed         thrpt   25  1212201.531 ± 248181.084  ops/s
+BenchmarkPublicKeys.sm2p256v1_uncompressed       thrpt   25   760033.805 ±  35058.515  ops/s
+```
+
+Our code for generating the sm2p256v1 key pairs using SunEC also has a better performance than the Bouncy Castle.
+
+```log
+Benchmark                                         Mode  Cnt       Score       Error  Units
+BenchmarkKeyGeneration.sm2p256v1_bc              thrpt   25      470.064 ±     39.347  ops/s
+BenchmarkKeyGeneration.sm2p256v1_sunec           thrpt   25     2515.464 ±     45.194  ops/s
 ```
