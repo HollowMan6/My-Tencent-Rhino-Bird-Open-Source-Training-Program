@@ -1,6 +1,6 @@
 <?xml version="1.0" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg version="1.1" width="1200" height="198" onload="init(evt)" viewBox="0 0 1200 198" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<svg version="1.1" width="1200" height="182" onload="init(evt)" viewBox="0 0 1200 182" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
 <!-- NOTES:  -->
 <defs>
@@ -412,45 +412,41 @@
 	}
 ]]>
 </script>
-<rect x="0.0" y="0" width="1200.0" height="198.0" fill="url(#background)"  />
+<rect x="0.0" y="0" width="1200.0" height="182.0" fill="url(#background)"  />
 <text id="title" x="600.00" y="24" >io-socket sm2p256v1_uncompressed-Throughput</text>
-<text id="details" x="10.00" y="181" > </text>
+<text id="details" x="10.00" y="165" > </text>
 <text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
 <text id="search" x="1090.00" y="24" >Search</text>
 <text id="ignorecase" x="1174.00" y="24" >ic</text>
-<text id="matched" x="1090.00" y="181" > </text>
+<text id="matched" x="1090.00" y="165" > </text>
 <g id="frames">
 <g >
-<title>java.io.BufferedInputStream.read1:310 (158 samples, 100.00%)</title><rect x="10.0" y="69" width="1180.0" height="15.0" fill="rgb(210,125,21)" rx="2" ry="2" />
-<text  x="13.00" y="79.5" >java.io.BufferedInputStream.read1:310</text>
+<title>all (55 samples, 100%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(223,184,3)" rx="2" ry="2" />
+<text  x="13.00" y="143.5" ></text>
 </g>
 <g >
-<title>all (158 samples, 100%)</title><rect x="10.0" y="149" width="1180.0" height="15.0" fill="rgb(240,187,4)" rx="2" ry="2" />
-<text  x="13.00" y="159.5" ></text>
+<title>java.io.BufferedInputStream.fill:244 (55 samples, 100.00%)</title><rect x="10.0" y="53" width="1180.0" height="15.0" fill="rgb(241,10,42)" rx="2" ry="2" />
+<text  x="13.00" y="63.5" >java.io.BufferedInputStream.fill:244</text>
 </g>
 <g >
-<title>java.io.BufferedInputStream.fill:255 (158 samples, 100.00%)</title><rect x="10.0" y="53" width="1180.0" height="15.0" fill="rgb(210,227,15)" rx="2" ry="2" />
-<text  x="13.00" y="63.5" >java.io.BufferedInputStream.fill:255</text>
+<title>org.openjdk.jmh.util.InputStreamDrainer.run:80 (55 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(217,87,54)" rx="2" ry="2" />
+<text  x="13.00" y="127.5" >org.openjdk.jmh.util.InputStreamDrainer.run:80</text>
 </g>
 <g >
-<title>org.openjdk.jmh.util.InputStreamDrainer.run:80 (158 samples, 100.00%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(207,42,15)" rx="2" ry="2" />
-<text  x="13.00" y="143.5" >org.openjdk.jmh.util.InputStreamDrainer.run:80</text>
+<title>java.io.FilterInputStream.read:105 (55 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(224,137,47)" rx="2" ry="2" />
+<text  x="13.00" y="111.5" >java.io.FilterInputStream.read:105</text>
 </g>
 <g >
-<title>java.io.BufferedInputStream.implRead:382 (158 samples, 100.00%)</title><rect x="10.0" y="85" width="1180.0" height="15.0" fill="rgb(219,26,19)" rx="2" ry="2" />
-<text  x="13.00" y="95.5" >java.io.BufferedInputStream.implRead:382</text>
+<title>java.io.FileInputStream.read:115 (55 samples, 100.00%)</title><rect x="10.0" y="37" width="1180.0" height="15.0" fill="rgb(240,45,14)" rx="2" ry="2" />
+<text  x="13.00" y="47.5" >java.io.FileInputStream.read:115</text>
 </g>
 <g >
-<title>java.io.FilterInputStream.read:95 (158 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(227,108,25)" rx="2" ry="2" />
-<text  x="13.00" y="127.5" >java.io.FilterInputStream.read:95</text>
+<title>java.io.BufferedInputStream.read1:284 (55 samples, 100.00%)</title><rect x="10.0" y="69" width="1180.0" height="15.0" fill="rgb(215,205,8)" rx="2" ry="2" />
+<text  x="13.00" y="79.5" >java.io.BufferedInputStream.read1:284</text>
 </g>
 <g >
-<title>java.io.FileInputStream.read:116 (158 samples, 100.00%)</title><rect x="10.0" y="37" width="1180.0" height="15.0" fill="rgb(216,124,53)" rx="2" ry="2" />
-<text  x="13.00" y="47.5" >java.io.FileInputStream.read:116</text>
-</g>
-<g >
-<title>java.io.BufferedInputStream.read:361 (158 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(220,44,7)" rx="2" ry="2" />
-<text  x="13.00" y="111.5" >java.io.BufferedInputStream.read:361</text>
+<title>java.io.BufferedInputStream.read:343 (55 samples, 100.00%)</title><rect x="10.0" y="85" width="1180.0" height="15.0" fill="rgb(229,167,33)" rx="2" ry="2" />
+<text  x="13.00" y="95.5" >java.io.BufferedInputStream.read:343</text>
 </g>
 </g>
 </svg>

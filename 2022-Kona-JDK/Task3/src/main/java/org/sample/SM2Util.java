@@ -1,133 +1,118 @@
 package org.sample;
 
-import org.bouncycastle.asn1.gm.GMNamedCurves;
-import org.bouncycastle.asn1.gm.GMObjectIdentifiers;
-import org.bouncycastle.asn1.x9.X9ECParameters;
-import org.bouncycastle.jcajce.provider.asymmetric.ec.BCECPrivateKey;
-import org.bouncycastle.jcajce.provider.asymmetric.ec.BCECPublicKey;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.jce.spec.ECParameterSpec;
-import org.bouncycastle.jce.spec.ECPrivateKeySpec;
-import org.bouncycastle.jce.spec.ECPublicKeySpec;
-import org.bouncycastle.math.ec.ECPoint;
-import org.bouncycastle.util.encoders.Hex;
-
 import java.math.BigInteger;
-import java.security.*;
-import java.security.spec.ECGenParameterSpec;
-import java.security.interfaces.ECPrivateKey;
-import java.security.interfaces.ECPublicKey;
-import java.util.Base64;
-
+import java.security.SecureRandom;
 
 public class SM2Util {
-    public static KeyPair generateSm2KeyPair() throws Exception {
-        final ECGenParameterSpec sm2Spec = new ECGenParameterSpec("sm2p256v1");
+  private SecureRandom rng;
+  private ECCurveFp curve;
+  private ECPointFp G;
+  private BigInteger n;
 
-        final KeyPairGenerator kpg = KeyPairGenerator.getInstance("EC", "SunEC");
-        SecureRandom random = new SecureRandom();
+  /**
+   * 生成ecparam
+   */
+  public SM2Util() {
+    this.rng = new SecureRandom();
+    // 椭圆曲线
+    BigInteger p = new BigInteger("FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF", 16);
+    BigInteger a = new BigInteger("FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC", 16);
+    BigInteger b = new BigInteger("28E9FA9E9D9F5E344D5A9E4BCF6509A7F39789F515AB8F92DDBCBD414D940E93", 16);
+    this.curve = new ECCurveFp(p, a, b);
 
-        kpg.initialize(sm2Spec, random);
+    // 基点
+    String gxHex = "32C4AE2C1F1981195F9904466A39C9948FE30BBFF2660BE1715A4589334C74C7";
+    String gyHex = "BC3736A2F4F6779C59BDCEE36B692153D0A9877CC62A474002DF32E52139F0A0";
+    this.G = curve.decodePointHex("04" + gxHex + gyHex);
 
-        KeyPair keyPair = kpg.genKeyPair();
-        return keyPair;
+    this.n = new BigInteger("FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123", 16);
+  }
+
+  /**
+   * 获取公共椭圆曲线
+   */
+  public ECCurveFp getGlobalCurve() {
+    return curve;
+  }
+
+  public String generatePrivateKeyHex() {
+    BigInteger random = new BigInteger(n.bitLength(), rng);
+    BigInteger d = random.mod(n.subtract(BigInteger.ONE)).add(BigInteger.ONE); // 随机数
+    String privateKey = leftPad(d.toString(16), 64);
+    return privateKey.toUpperCase();
+  }
+
+  /**
+   * 生成密钥对：publicKey = privateKey * G
+   */
+  public String getHexPublicKey(String privateKey) {
+    BigInteger d = new BigInteger(privateKey, 16);
+    ECPointFp P = G.multiply(d); // P = dG，p 为公钥，d 为私钥
+
+    String Px = leftPad(P.getX().toBigInteger().toString(16), 64);
+    BigInteger PyI = P.getY().toBigInteger();
+
+    String suffix = "03";
+    if (PyI.mod(BigInteger.valueOf(2)).equals(BigInteger.ZERO)) {
+        suffix = "02";
     }
 
-    public static String getHexPublicKey(PublicKey publicKey) {
-        ECPublicKey pk = (ECPublicKey) publicKey;
-        
-        BigInteger pubKeyY = pk.getW().getAffineY();
+   return (suffix + Px).toUpperCase();
+  }
 
-        String suffix = "03";
-        if (pubKeyY.mod(BigInteger.valueOf(2)).equals(BigInteger.valueOf(0))) {
-            suffix = "02";
-        }
+  public String getHexPublicKeyUncompressed(String privateKey) {
+    BigInteger d = new BigInteger(privateKey, 16);
+    ECPointFp P = G.multiply(d); // P = dG，p 为公钥，d 为私钥
+    String Px = leftPad(P.getX().toBigInteger().toString(16), 64);
+    String Py = leftPad(P.getY().toBigInteger().toString(16), 64);
+    return ("04" + Px + Py).toUpperCase();
+  }
 
-        String pubKeyXHex = bigIntegerToHex(pk.getW().getAffineX(), 64);
+  /**
+   * 补全16进制字符串
+   */
+  public String leftPad(String input, int num) {
+    if (input.length() >= num) return input;
 
-       return (suffix + pubKeyXHex).toUpperCase();
+    return String.format("%0" + (num - input.length()) + "d", 0) + input;
+  }
 
+  /**
+   * 验证公钥是否为椭圆曲线上的点
+   */
+  public boolean verifyPublicKey(String publicKey) {
+    ECPointFp point = curve.decodePointHex(publicKey);
+    if (point == null) return false;
+
+    ECFieldElementFp x = point.getX();
+    ECFieldElementFp y = point.getY();
+
+    // 验证 y^2 是否等于 x^3 + ax + b
+    return y.square().equals(x.multiply(x.square()).add(x.multiply(curve.a)).add(curve.b));
+  }
+
+  public static void main(String[] args) {
+    SM2Util sm2 = new SM2Util();
+
+    String prvKey = sm2.generatePrivateKeyHex();
+    System.out.println("Private Key: " + prvKey);
+
+    String pubKey = sm2.getHexPublicKeyUncompressed(prvKey);
+    String pubKeyZip = sm2.getHexPublicKey(prvKey);
+    
+    System.out.println("Public Key (Uncompressed): " + pubKey);
+    System.out.println("Public Key: " + pubKeyZip);
+
+    if (sm2.verifyPublicKey(pubKey)) {
+      System.out.println("Public Key (Uncompressed) is valid");
+    } else {
+      System.out.println("Public Key (Uncompressed) is invalid");
     }
 
-    public static String getHexPublicKeyUncompressed(PublicKey publicKey) {
-        ECPublicKey pk = (ECPublicKey) publicKey;
-        
-        String pubKeyXHex = bigIntegerToHex(pk.getW().getAffineX(), 64);
-        String pubKeyYHex = bigIntegerToHex(pk.getW().getAffineY(), 64);
-        return ("04" + pubKeyXHex + pubKeyYHex).toUpperCase();
+    if (sm2.verifyPublicKey(pubKeyZip)) {
+      System.out.println("Public Key is valid");
+    } else {
+      System.out.println("Public Key is invalid");
     }
-
-    public static String getHexPrivateKey(PrivateKey privateKey) {
-        ECPrivateKey pk = (ECPrivateKey) privateKey;
-        return pk.getS().toString(16).toUpperCase();
-    }
-
-    public static String bigIntegerToHex(BigInteger num, int width) {
-        String str = num.toString(16);
-        if (str.length() < width) {
-            str = String.format("%0" + (width - str.length()) + "d", 0) + str;
-        }
-        return str;
-    }
-
-    private BouncyCastleProvider provider;
-    private X9ECParameters parameters;
-    private ECParameterSpec ecParameterSpec;
-    private KeyFactory keyFactory;
-
-    public SM2Util() throws Exception {
-        provider = new BouncyCastleProvider();
-        parameters = GMNamedCurves.getByName("sm2p256v1");
-        ecParameterSpec = new ECParameterSpec(parameters.getCurve(),
-                parameters.getG(), parameters.getN(), parameters.getH());
-        keyFactory = KeyFactory.getInstance("EC", provider);
-    }
-
-    public String sign(String plainText, String prvKey) throws Exception {
-        Signature signature = Signature.getInstance(GMObjectIdentifiers.sm2sign_with_sm3.toString(), provider);
-
-        BigInteger bigInteger = new BigInteger(prvKey, 16);
-        BCECPrivateKey privateKey = (BCECPrivateKey) keyFactory.generatePrivate(new ECPrivateKeySpec(bigInteger,
-                ecParameterSpec));
-
-        signature.initSign(privateKey);
-
-        signature.update(plainText.getBytes());
-
-        return Base64.getEncoder().encodeToString(signature.sign());
-    }
-
-    public void verify(String plainText, String signatureValue, String pubKey) throws Exception {
-        Signature signature = Signature.getInstance(GMObjectIdentifiers.sm2sign_with_sm3.toString(), provider);
-
-        ECPoint ecPoint = parameters.getCurve().decodePoint(Hex.decode(pubKey));
-        BCECPublicKey key = (BCECPublicKey) keyFactory.generatePublic(new ECPublicKeySpec(ecPoint, ecParameterSpec));
-
-        signature.initVerify(key);
-        signature.update(plainText.getBytes());
-        if (!signature.verify(Base64.getDecoder().decode(signatureValue))) {
-            throw new Exception("Failed to verify signature");
-        };
-    }
-
-    public static void main(String[] args) throws Exception {
-        SM2Util sm2 = new SM2Util();
-        KeyPair keyPair = generateSm2KeyPair();
-
-        String pubKey = getHexPublicKeyUncompressed(keyPair.getPublic());
-        String pubKeyZip = getHexPublicKey(keyPair.getPublic());
-        String prvKey = getHexPrivateKey(keyPair.getPrivate());
-
-        System.out.println("Public Key (Uncompressed): " + pubKey);
-        System.out.println("Public Key: " + pubKeyZip);
-        System.out.println("Private Key: " + prvKey);
-
-        String str = "How are you?";
-        System.out.println("To sign: " + str);
-        String signStr = sm2.sign(str, prvKey);
-        System.out.println("Signed: " + signStr);
-        sm2.verify(str, signStr, pubKey);
-        sm2.verify(str, signStr, pubKeyZip);
-        System.out.println("Verification OK!");
-    }
+  }
 }

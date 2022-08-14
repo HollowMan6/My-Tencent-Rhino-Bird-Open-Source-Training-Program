@@ -18,13 +18,12 @@ import java.security.*;
 
 @State(Scope.Thread)
 public class BenchmarkKeyGeneration {
-    KeyPair keyPair;
-
     @Benchmark
-    public void sm2p256v1_sunec() throws Exception {
-        keyPair = SM2Util.generateSm2KeyPair();
-        String pubKey = SM2Util.getHexPublicKey(keyPair.getPublic());
-        String prvKey = SM2Util.getHexPrivateKey(keyPair.getPrivate());
+    public void sm2p256v1_homemade() throws Exception {
+        SM2Util sm2 = new SM2Util();
+
+        String prvKey = sm2.generatePrivateKeyHex();
+        String pubKeyZip = sm2.getHexPublicKey(prvKey);
     }
 
     @Benchmark

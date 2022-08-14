@@ -9,7 +9,7 @@ https://github.com/openjdk/jdk/pull/9541
 ## Task 2
 [Requirement](https://docs.qq.com/doc/DUXhGSXBHZG11eUJ0)
 
-[Result](Task2/README.md)
+[Result](https://github.com/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program/tree/main/2022-Kona-JDK/Task2/README.md)
 
 Tested computing the signature as well as verifying the signature for comparing between `secp256r1` and `secp256k1` using SHA256withECDSA with the help of the SunEC provider.
 
@@ -41,14 +41,15 @@ Further investigation shows that before `secp256k1` was removed from JDK, all th
 
 After some communications with my mentor Johns Jiang, he tells me that [JDK-8181594](https://bugs.openjdk.org/browse/JDK-8181594) introduces the optimized finite field implementations in Java. Previously before that implementation was introduced, pure Java realization was really slow, then we use the OS library to realize all the curves so that the performance can be improved. But now, instead, with the help of that [optimized Java library](https://mail.openjdk.org/pipermail/core-libs-dev/2018-February/051729.html), Java realization takes the advantage and becomes the most efficient one, it's now even comparable with the pure C realization.
 
-Our flame graph also some kind confirms this, as you can see [here](Task2/README.md#cpu), the Java Flight Recorder (JFR) can record the `secp256r1` methods calling stacks, but it's not the case for `secp256k1`. So it's likely that `secp256r1` has a better performance than `secp256k1` for signing since it's fully realized in Java and using that optimized library, thus reduces the calling costs for the OS library. If they are both realized in Java using the optimized method, I guess there should be no difference.
+Our flame graph also some kind confirms this, as you can see [here](https://github.com/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program/tree/main/2022-Kona-JDK/Task2/README.md#cpu), the Java Flight Recorder (JFR) can record the `secp256r1` methods calling stacks, but it's not the case for `secp256k1`. So it's likely that `secp256r1` has a better performance than `secp256k1` for signing since it's fully realized in Java and using that optimized library, thus reduces the calling costs for the OS library. If they are both realized in Java using the optimized method, I guess there should be no difference.
 
 As `secp256k1` has already been removed in JDK and now `secp256r1` does have a better performance, so I guess here we will have no obvious further room for improvement.
 
 ## Task 3
 [Requirement](https://docs.qq.com/doc/DUVhpTE9HcVJmZFNF)
 
-[Result](Task3/README.md)
+### [With modification of SunEC provider](https://github.com/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program/tree/main/2022-Kona-JDK/Task3-SunEC)
+[Result](https://github.com/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program/tree/main/2022-Kona-JDK/Task3-SunEC/README.md)
 
 As for Elliptic-curve based cryptography algorithms, the curve parameters are used to generate the keys.
 The official recommended curve parameters for SM2 can be seen here:
@@ -61,8 +62,7 @@ The OID for `sm2p256v1` is `1.2.156.10197.1.301`: http://gmssl.org/docs/oid.html
 https://github.com/HollowMan6/jdk/tree/sm2
 https://github.com/HollowMan6/jdk/commit/c3e924641bb3a838f6abc496dd380ceb619df163
 
-We first fill the curve parameters into the [CurveDB](
-https://github.com/HollowMan6/jdk/blob/c3e924641bb3a838f6abc496dd380ceb619df163/src/java.base/share/classes/sun/security/util/CurveDB.java#L258-L265)
+We first fill the curve parameters into the [CurveDB](https://github.com/HollowMan6/jdk/blob/c3e924641bb3a838f6abc496dd380ceb619df163/src/java.base/share/classes/sun/security/util/CurveDB.java#L258-L265)
 
 Then add the OID and names.
 
@@ -140,4 +140,29 @@ Our code for generating the sm2p256v1 key pairs using SunEC also has a better pe
 Benchmark                                         Mode  Cnt       Score       Error  Units
 BenchmarkKeyGeneration.sm2p256v1_bc              thrpt   25      470.064 ±     39.347  ops/s
 BenchmarkKeyGeneration.sm2p256v1_sunec           thrpt   25     2515.464 ±     45.194  ops/s
+```
+
+### [Homemade](https://github.com/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program/tree/main/2022-Kona-JDK/Task3)
+Our realization refers to the JavaScript implementation [here](https://github.com/wechat-miniprogram/sm-crypto/tree/master/src/sm2), [Wikipedia Elliptic curve point multiplication](https://en.wikipedia.org/wiki/Elliptic_curve_point_multiplication) and the [official documentation](https://www.oscca.gov.cn/sca/xxgk/2010-12/17/1002386/files/b791a9f908bb4803875ab6aeeb7b4e03.pdf) .
+
+The homemade one is based on purely mathematical methods, no other dependencies.
+
+We use [SecureRandom](https://en.wikipedia.org/wiki/Cryptographically_secure_pseudorandom_number_generator) to generate the private key.
+
+[Result](https://github.com/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program/tree/main/2022-Kona-JDK/Task3/README.md)
+
+JMH Performance test for compressed and uncompressed public key generation result shows that the uncompressed public keys generation has almost the same performance as the compressed ones. Though it seems like a contradiction, here the uncompressed Y coordinate Hex caculation counts significantly smaller when you take the overall time into consideration.
+
+```log
+Benchmark                                         Mode  Cnt       Score       Error  Units
+BenchmarkPublicKeys.sm2p256v1_compressed         thrpt   25  786.038 ± 12.099  ops/s
+BenchmarkPublicKeys.sm2p256v1_uncompressed       thrpt   25  795.960 ±  8.557  ops/s
+```
+
+Our homemade code for generating the sm2p256v1 key pairs also has a better performance than the Bouncy Castle.
+
+```log
+Benchmark                                         Mode  Cnt       Score       Error  Units
+BenchmarkKeyGeneration.sm2p256v1_bc              thrpt   25  515.809 ± 13.833  ops/s
+BenchmarkKeyGeneration.sm2p256v1_homemade        thrpt   25  783.723 ± 13.842  ops/s
 ```

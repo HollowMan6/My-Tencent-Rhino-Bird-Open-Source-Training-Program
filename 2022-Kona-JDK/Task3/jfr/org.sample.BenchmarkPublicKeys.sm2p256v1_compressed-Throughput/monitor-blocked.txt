@@ -1,2 +1,3 @@
-java.lang.Thread.run:1589;jdk.jfr.internal.PlatformRecorder$$Lambda$112+0x000000080017a690.1519956952.run:-1;jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:442;jdk.jfr.internal.PlatformRecorder.periodicTask:505;jdk.jfr.internal.PlatformRecorder.takeNap:524;java.lang.Object.wait:366;java.lang.Object.wait0:-1 49138
+jdk.internal.misc.InnocuousThread.run:162;java.lang.Thread.run:833;jdk.internal.ref.CleanerImpl.run:140;java.lang.ref.ReferenceQueue.remove:155;java.lang.Object.wait:-1 315
+java.lang.Thread.run:833;jdk.jfr.internal.PlatformRecorder$$Lambda$84+0x0000000800c68408.766575284.run:-1;jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:447;jdk.jfr.internal.PlatformRecorder.periodicTask:507;jdk.jfr.internal.PlatformRecorder.takeNap:526;java.lang.Object.wait:-1 48562
 

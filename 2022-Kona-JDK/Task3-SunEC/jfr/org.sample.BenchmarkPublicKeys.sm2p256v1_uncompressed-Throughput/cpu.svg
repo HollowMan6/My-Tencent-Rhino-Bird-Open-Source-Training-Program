@@ -1,0 +1,2692 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="534" onload="init(evt)" viewBox="0 0 1200 534" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom();
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				clearzoom();
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x = txt.length - 2; x > 0; x--) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom() {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="534.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >cpu sm2p256v1_uncompressed-Throughput</text>
+<text id="details" x="10.00" y="517" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="517" > </text>
+<g id="frames">
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1523 (12 samples, 0.44%)</title><rect x="235.7" y="69" width="5.2" height="15.0" fill="rgb(214,56,6)" rx="2" ry="2" />
+<text  x="238.75" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:651 (1 samples, 0.04%)</title><rect x="397.7" y="53" width="0.5" height="15.0" fill="rgb(224,184,26)" rx="2" ry="2" />
+<text  x="400.73" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.StringBuilder.append:179 (29 samples, 1.06%)</title><rect x="473.6" y="117" width="12.4" height="15.0" fill="rgb(221,69,18)" rx="2" ry="2" />
+<text  x="476.56" y="127.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.inflateIfNeededFor:1732 (2 samples, 0.07%)</title><rect x="528.7" y="69" width="0.9" height="15.0" fill="rgb(227,11,0)" rx="2" ry="2" />
+<text  x="531.70" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1563 (2 samples, 0.07%)</title><rect x="322.8" y="69" width="0.8" height="15.0" fill="rgb(209,168,45)" rx="2" ry="2" />
+<text  x="325.77" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:159 (11 samples, 0.40%)</title><rect x="512.3" y="117" width="4.8" height="15.0" fill="rgb(242,95,37)" rx="2" ry="2" />
+<text  x="515.33" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:165 (1 samples, 0.04%)</title><rect x="983.6" y="101" width="0.5" height="15.0" fill="rgb(225,38,47)" rx="2" ry="2" />
+<text  x="986.64" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1528 (10 samples, 0.37%)</title><rect x="242.6" y="69" width="4.3" height="15.0" fill="rgb(249,33,17)" rx="2" ry="2" />
+<text  x="245.64" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:651 (2 samples, 0.07%)</title><rect x="365.9" y="53" width="0.8" height="15.0" fill="rgb(215,174,30)" rx="2" ry="2" />
+<text  x="368.85" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.primitiveLeftShift:702 (6 samples, 0.22%)</title><rect x="409.8" y="37" width="2.6" height="15.0" fill="rgb(243,172,26)" rx="2" ry="2" />
+<text  x="412.80" y="47.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4170 (1 samples, 0.04%)</title><rect x="1008.2" y="133" width="0.4" height="15.0" fill="rgb(243,88,33)" rx="2" ry="2" />
+<text  x="1011.20" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.&lt;init&gt;:98 (6 samples, 0.22%)</title><rect x="566.2" y="133" width="2.6" height="15.0" fill="rgb(251,188,35)" rx="2" ry="2" />
+<text  x="569.18" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1183 (8 samples, 0.29%)</title><rect x="119.9" y="85" width="3.4" height="15.0" fill="rgb(239,73,28)" rx="2" ry="2" />
+<text  x="122.86" y="95.5" ></text>
+</g>
+<g >
+<title>org.sample.SM2Util.bigIntegerToHex:66 (1,212 samples, 44.25%)</title><rect x="13.4" y="181" width="522.2" height="15.0" fill="rgb(254,25,20)" rx="2" ry="2" />
+<text  x="16.45" y="191.5" >org.sample.SM2Util.bigIntegerToHex:66</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1496 (3 samples, 0.11%)</title><rect x="207.3" y="69" width="1.3" height="15.0" fill="rgb(245,17,6)" rx="2" ry="2" />
+<text  x="210.31" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:140 (1 samples, 0.04%)</title><rect x="132.4" y="69" width="0.4" height="15.0" fill="rgb(247,53,28)" rx="2" ry="2" />
+<text  x="135.35" y="79.5" ></text>
+</g>
+<g >
+<title>java.io.FileInputStream.read:269 (4 samples, 0.15%)</title><rect x="1186.6" y="453" width="1.7" height="15.0" fill="rgb(246,13,25)" rx="2" ry="2" />
+<text  x="1189.55" y="463.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1232 (624 samples, 22.78%)</title><rect x="168.1" y="85" width="268.8" height="15.0" fill="rgb(250,140,31)" rx="2" ry="2" />
+<text  x="171.11" y="95.5" >java.math.MutableBigInteger.divideK..</text>
+</g>
+<g >
+<title>java.lang.Long.toString:155 (4 samples, 0.15%)</title><rect x="486.9" y="117" width="1.7" height="15.0" fill="rgb(243,160,40)" rx="2" ry="2" />
+<text  x="489.91" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:650 (6 samples, 0.22%)</title><rect x="883.7" y="53" width="2.6" height="15.0" fill="rgb(251,73,38)" rx="2" ry="2" />
+<text  x="886.69" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.Thread.run:1589 (2,726 samples, 99.53%)</title><rect x="10.0" y="469" width="1174.4" height="15.0" fill="rgb(237,54,8)" rx="2" ry="2" />
+<text  x="13.00" y="479.5" >java.lang.Thread.run:1589</text>
+</g>
+<g >
+<title>java.math.BigInteger.padWithZeros:4112 (1 samples, 0.04%)</title><rect x="991.4" y="117" width="0.4" height="15.0" fill="rgb(231,62,12)" rx="2" ry="2" />
+<text  x="994.39" y="127.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.&lt;init&gt;:98 (5 samples, 0.18%)</title><rect x="41.0" y="133" width="2.2" height="15.0" fill="rgb(211,109,48)" rx="2" ry="2" />
+<text  x="44.02" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divide:1158 (740 samples, 27.02%)</title><rect x="118.1" y="101" width="318.8" height="15.0" fill="rgb(213,201,2)" rx="2" ry="2" />
+<text  x="121.13" y="111.5" >java.math.MutableBigInteger.divide:1158</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1499 (34 samples, 1.24%)</title><rect x="739.4" y="69" width="14.6" height="15.0" fill="rgb(249,22,21)" rx="2" ry="2" />
+<text  x="742.37" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1614 (1 samples, 0.04%)</title><rect x="890.6" y="69" width="0.4" height="15.0" fill="rgb(218,10,50)" rx="2" ry="2" />
+<text  x="893.58" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.CharacterDataLatin1.toUpperCaseEx:247 (16 samples, 0.58%)</title><rect x="1106.9" y="133" width="6.8" height="15.0" fill="rgb(250,103,5)" rx="2" ry="2" />
+<text  x="1109.85" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.ensureCapacityInternal:239 (3 samples, 0.11%)</title><rect x="475.7" y="85" width="1.3" height="15.0" fill="rgb(227,81,30)" rx="2" ry="2" />
+<text  x="478.71" y="95.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:526 (61 samples, 2.23%)</title><rect x="1080.6" y="149" width="26.3" height="15.0" fill="rgb(227,37,48)" rx="2" ry="2" />
+<text  x="1083.57" y="159.5" >j..</text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:522 (12 samples, 0.44%)</title><rect x="1065.1" y="149" width="5.1" height="15.0" fill="rgb(230,85,38)" rx="2" ry="2" />
+<text  x="1068.06" y="159.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:648 (14 samples, 0.51%)</title><rect x="872.9" y="53" width="6.1" height="15.0" fill="rgb(212,120,9)" rx="2" ry="2" />
+<text  x="875.92" y="63.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.periodicTask:505 (1 samples, 0.04%)</title><rect x="1184.0" y="421" width="0.4" height="15.0" fill="rgb(212,71,3)" rx="2" ry="2" />
+<text  x="1186.97" y="431.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1466 (1 samples, 0.04%)</title><rect x="173.3" y="53" width="0.4" height="15.0" fill="rgb(245,62,31)" rx="2" ry="2" />
+<text  x="176.28" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.ProcessImpl.waitFor:569 (1 samples, 0.04%)</title><rect x="1184.4" y="293" width="0.4" height="15.0" fill="rgb(213,220,24)" rx="2" ry="2" />
+<text  x="1187.40" y="303.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:648 (23 samples, 0.84%)</title><rect x="346.5" y="53" width="9.9" height="15.0" fill="rgb(242,168,51)" rx="2" ry="2" />
+<text  x="349.47" y="63.5" ></text>
+</g>
+<g >
+<title>all (2,739 samples, 100%)</title><rect x="10.0" y="485" width="1180.0" height="15.0" fill="rgb(246,138,30)" rx="2" ry="2" />
+<text  x="13.00" y="495.5" ></text>
+</g>
+<g >
+<title>java.util.Locale.getLanguage:1300 (1 samples, 0.04%)</title><rect x="1064.6" y="133" width="0.5" height="15.0" fill="rgb(250,221,18)" rx="2" ry="2" />
+<text  x="1067.63" y="143.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine$RequestHook.execute:66 (1 samples, 0.04%)</title><rect x="1177.9" y="373" width="0.5" height="15.0" fill="rgb(246,166,46)" rx="2" ry="2" />
+<text  x="1180.94" y="383.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3895 (2 samples, 0.07%)</title><rect x="681.2" y="53" width="0.9" height="15.0" fill="rgb(215,192,48)" rx="2" ry="2" />
+<text  x="684.21" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1581 (4 samples, 0.15%)</title><rect x="336.1" y="69" width="1.7" height="15.0" fill="rgb(238,133,49)" rx="2" ry="2" />
+<text  x="339.13" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:391 (2 samples, 0.07%)</title><rect x="415.0" y="53" width="0.8" height="15.0" fill="rgb(244,150,53)" rx="2" ry="2" />
+<text  x="417.97" y="63.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.util.InputStreamDrainer.run:80 (8 samples, 0.29%)</title><rect x="1186.6" y="469" width="3.4" height="15.0" fill="rgb(242,165,12)" rx="2" ry="2" />
+<text  x="1189.55" y="479.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1581 (5 samples, 0.18%)</title><rect x="864.3" y="69" width="2.2" height="15.0" fill="rgb(248,169,5)" rx="2" ry="2" />
+<text  x="867.30" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:191 (59 samples, 2.15%)</title><rect x="952.6" y="117" width="25.4" height="15.0" fill="rgb(211,13,50)" rx="2" ry="2" />
+<text  x="955.62" y="127.5" >j..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:550 (2 samples, 0.07%)</title><rect x="402.0" y="53" width="0.9" height="15.0" fill="rgb(241,226,10)" rx="2" ry="2" />
+<text  x="405.04" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.ensureCapacityInternal:239 (4 samples, 0.15%)</title><rect x="997.0" y="85" width="1.7" height="15.0" fill="rgb(227,80,51)" rx="2" ry="2" />
+<text  x="1000.00" y="95.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3823 (5 samples, 0.18%)</title><rect x="518.4" y="85" width="2.1" height="15.0" fill="rgb(214,194,41)" rx="2" ry="2" />
+<text  x="521.36" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1634 (2 samples, 0.07%)</title><rect x="905.2" y="69" width="0.9" height="15.0" fill="rgb(248,69,48)" rx="2" ry="2" />
+<text  x="908.23" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4172 (79 samples, 2.88%)</title><rect x="486.5" y="133" width="34.0" height="15.0" fill="rgb(214,191,48)" rx="2" ry="2" />
+<text  x="489.48" y="143.5" >ja..</text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4152 (70 samples, 2.56%)</title><rect x="947.9" y="133" width="30.1" height="15.0" fill="rgb(205,212,37)" rx="2" ry="2" />
+<text  x="950.88" y="143.5" >ja..</text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4149 (25 samples, 0.91%)</title><rect x="592.5" y="133" width="10.7" height="15.0" fill="rgb(229,159,18)" rx="2" ry="2" />
+<text  x="595.46" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:164 (3 samples, 0.11%)</title><rect x="990.1" y="117" width="1.3" height="15.0" fill="rgb(213,121,45)" rx="2" ry="2" />
+<text  x="993.10" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1470 (10 samples, 0.37%)</title><rect x="214.2" y="53" width="4.3" height="15.0" fill="rgb(212,146,21)" rx="2" ry="2" />
+<text  x="217.21" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.ensureCapacityInternal:242 (2 samples, 0.07%)</title><rect x="1041.4" y="85" width="0.8" height="15.0" fill="rgb(253,101,13)" rx="2" ry="2" />
+<text  x="1044.37" y="95.5" ></text>
+</g>
+<g >
+<title>java.lang.Number.&lt;init&gt;:59 (2 samples, 0.07%)</title><rect x="979.8" y="85" width="0.8" height="15.0" fill="rgb(245,176,1)" rx="2" ry="2" />
+<text  x="982.76" y="95.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.FutureTask.run:317 (2,707 samples, 98.83%)</title><rect x="10.0" y="421" width="1166.2" height="15.0" fill="rgb(235,58,1)" rx="2" ry="2" />
+<text  x="13.00" y="431.5" >java.util.concurrent.FutureTask.run:317</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1675 (45 samples, 1.64%)</title><rect x="415.0" y="69" width="19.4" height="15.0" fill="rgb(227,29,27)" rx="2" ry="2" />
+<text  x="417.97" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.ArrayList.get:427 (3 samples, 0.11%)</title><rect x="1176.2" y="389" width="1.3" height="15.0" fill="rgb(217,88,49)" rx="2" ry="2" />
+<text  x="1179.21" y="399.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toString:4204 (1,111 samples, 40.56%)</title><rect x="568.8" y="149" width="478.6" height="15.0" fill="rgb(237,190,41)" rx="2" ry="2" />
+<text  x="571.77" y="159.5" >java.math.BigInteger.toString:4204</text>
+</g>
+<g >
+<title>java.lang.ProcessImpl.waitForInterruptibly:-1 (4 samples, 0.15%)</title><rect x="1184.8" y="277" width="1.8" height="15.0" fill="rgb(242,152,41)" rx="2" ry="2" />
+<text  x="1187.83" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:652 (5 samples, 0.18%)</title><rect x="398.2" y="53" width="2.1" height="15.0" fill="rgb(227,181,47)" rx="2" ry="2" />
+<text  x="401.16" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:168 (2 samples, 0.07%)</title><rect x="468.0" y="101" width="0.8" height="15.0" fill="rgb(213,227,38)" rx="2" ry="2" />
+<text  x="470.96" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1508 (1 samples, 0.04%)</title><rect x="754.0" y="69" width="0.4" height="15.0" fill="rgb(227,212,34)" rx="2" ry="2" />
+<text  x="757.02" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.Object.&lt;init&gt;:45 (3 samples, 0.11%)</title><rect x="41.9" y="117" width="1.3" height="15.0" fill="rgb(248,192,2)" rx="2" ry="2" />
+<text  x="44.88" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getLowestSetBit:359 (18 samples, 0.66%)</title><rect x="155.2" y="69" width="7.7" height="15.0" fill="rgb(226,124,10)" rx="2" ry="2" />
+<text  x="158.18" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3823 (6 samples, 0.22%)</title><rect x="1052.6" y="101" width="2.6" height="15.0" fill="rgb(221,50,26)" rx="2" ry="2" />
+<text  x="1055.57" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1466 (2 samples, 0.07%)</title><rect x="704.9" y="53" width="0.9" height="15.0" fill="rgb(233,197,45)" rx="2" ry="2" />
+<text  x="707.90" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1565 (2 samples, 0.07%)</title><rect x="851.4" y="69" width="0.8" height="15.0" fill="rgb(227,44,37)" rx="2" ry="2" />
+<text  x="854.38" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.String.&lt;init&gt;:1487 (6 samples, 0.22%)</title><rect x="533.0" y="133" width="2.6" height="15.0" fill="rgb(218,209,30)" rx="2" ry="2" />
+<text  x="536.01" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.primitiveLeftShift:702 (4 samples, 0.15%)</title><rect x="921.6" y="37" width="1.7" height="15.0" fill="rgb(211,15,26)" rx="2" ry="2" />
+<text  x="924.60" y="47.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1635 (3 samples, 0.11%)</title><rect x="385.7" y="69" width="1.3" height="15.0" fill="rgb(236,8,39)" rx="2" ry="2" />
+<text  x="388.67" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1542 (2 samples, 0.07%)</title><rect x="255.1" y="69" width="0.9" height="15.0" fill="rgb(228,213,2)" rx="2" ry="2" />
+<text  x="258.13" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:551 (1 samples, 0.04%)</title><rect x="402.9" y="53" width="0.4" height="15.0" fill="rgb(240,204,22)" rx="2" ry="2" />
+<text  x="405.90" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.ProcessImpl.waitFor:569 (4 samples, 0.15%)</title><rect x="1184.8" y="293" width="1.8" height="15.0" fill="rgb(211,126,25)" rx="2" ry="2" />
+<text  x="1187.83" y="303.5" ></text>
+</g>
+<g >
+<title>org.sample.BenchmarkPublicKeys.sm2p256v1_uncompressed:26 (2,703 samples, 98.69%)</title><rect x="10.0" y="213" width="1164.5" height="15.0" fill="rgb(247,141,30)" rx="2" ry="2" />
+<text  x="13.00" y="223.5" >org.sample.BenchmarkPublicKeys.sm2p256v1_uncompressed:26</text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3894 (4 samples, 0.15%)</title><rect x="449.4" y="85" width="1.8" height="15.0" fill="rgb(220,225,43)" rx="2" ry="2" />
+<text  x="452.43" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:103 (16 samples, 0.58%)</title><rect x="60.4" y="117" width="6.9" height="15.0" fill="rgb(253,182,48)" rx="2" ry="2" />
+<text  x="63.41" y="127.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:518 (1 samples, 0.04%)</title><rect x="1064.6" y="149" width="0.5" height="15.0" fill="rgb(234,4,5)" rx="2" ry="2" />
+<text  x="1067.63" y="159.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:647 (7 samples, 0.26%)</title><rect x="869.9" y="53" width="3.0" height="15.0" fill="rgb(220,41,40)" rx="2" ry="2" />
+<text  x="872.91" y="63.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.profile.JavaFlightRecorderProfiler.afterIteration:146 (4 samples, 0.15%)</title><rect x="1184.8" y="341" width="1.8" height="15.0" fill="rgb(248,75,17)" rx="2" ry="2" />
+<text  x="1187.83" y="351.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:397 (1 samples, 0.04%)</title><rect x="925.9" y="53" width="0.4" height="15.0" fill="rgb(215,207,14)" rx="2" ry="2" />
+<text  x="928.91" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getLowestSetBit:356 (2 samples, 0.07%)</title><rect x="688.1" y="69" width="0.9" height="15.0" fill="rgb(216,153,41)" rx="2" ry="2" />
+<text  x="691.10" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1523 (1 samples, 0.04%)</title><rect x="764.8" y="69" width="0.4" height="15.0" fill="rgb(233,110,33)" rx="2" ry="2" />
+<text  x="767.79" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:68 (3 samples, 0.11%)</title><rect x="682.1" y="69" width="1.3" height="15.0" fill="rgb(242,102,35)" rx="2" ry="2" />
+<text  x="685.07" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:652 (4 samples, 0.15%)</title><rect x="910.8" y="53" width="1.8" height="15.0" fill="rgb(242,90,10)" rx="2" ry="2" />
+<text  x="913.83" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4167 (38 samples, 1.39%)</title><rect x="991.8" y="133" width="16.4" height="15.0" fill="rgb(212,197,50)" rx="2" ry="2" />
+<text  x="994.83" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1677 (9 samples, 0.33%)</title><rect x="944.0" y="69" width="3.9" height="15.0" fill="rgb(241,219,18)" rx="2" ry="2" />
+<text  x="947.01" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:162 (12 samples, 0.44%)</title><rect x="961.2" y="101" width="5.2" height="15.0" fill="rgb(247,88,24)" rx="2" ry="2" />
+<text  x="964.24" y="111.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.takeNap:524 (1 samples, 0.04%)</title><rect x="1184.0" y="405" width="0.4" height="15.0" fill="rgb(250,82,2)" rx="2" ry="2" />
+<text  x="1186.97" y="415.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1613 (2 samples, 0.07%)</title><rect x="889.7" y="69" width="0.9" height="15.0" fill="rgb(208,90,41)" rx="2" ry="2" />
+<text  x="892.72" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:403 (25 samples, 0.91%)</title><rect x="423.2" y="53" width="10.7" height="15.0" fill="rgb(252,75,21)" rx="2" ry="2" />
+<text  x="426.15" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:103 (17 samples, 0.62%)</title><rect x="585.1" y="117" width="7.4" height="15.0" fill="rgb(229,140,21)" rx="2" ry="2" />
+<text  x="588.14" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:543 (1 samples, 0.04%)</title><rect x="401.2" y="53" width="0.4" height="15.0" fill="rgb(226,206,19)" rx="2" ry="2" />
+<text  x="404.18" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:550 (5 samples, 0.18%)</title><rect x="914.7" y="53" width="2.2" height="15.0" fill="rgb(233,52,23)" rx="2" ry="2" />
+<text  x="917.71" y="63.5" ></text>
+</g>
+<g >
+<title>java.io.BufferedInputStream.implRead:382 (4 samples, 0.15%)</title><rect x="1188.3" y="421" width="1.7" height="15.0" fill="rgb(207,74,6)" rx="2" ry="2" />
+<text  x="1191.28" y="431.5" ></text>
+</g>
+<g >
+<title>java.lang.String.coder:4559 (7 samples, 0.26%)</title><rect x="1044.0" y="53" width="3.0" height="15.0" fill="rgb(229,148,42)" rx="2" ry="2" />
+<text  x="1046.95" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.String.&lt;init&gt;:4554 (1 samples, 0.04%)</title><rect x="517.9" y="85" width="0.5" height="15.0" fill="rgb(209,26,46)" rx="2" ry="2" />
+<text  x="520.93" y="95.5" ></text>
+</g>
+<g >
+<title>java.lang.String.getBytes:4471 (1 samples, 0.04%)</title><rect x="483.5" y="69" width="0.4" height="15.0" fill="rgb(232,208,43)" rx="2" ry="2" />
+<text  x="486.46" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1473 (1 samples, 0.04%)</title><rect x="753.6" y="53" width="0.4" height="15.0" fill="rgb(247,173,47)" rx="2" ry="2" />
+<text  x="756.59" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toString:4099 (1,111 samples, 40.56%)</title><rect x="568.8" y="165" width="478.6" height="15.0" fill="rgb(207,110,12)" rx="2" ry="2" />
+<text  x="571.77" y="175.5" >java.math.BigInteger.toString:4099</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:651 (1 samples, 0.04%)</title><rect x="910.4" y="53" width="0.4" height="15.0" fill="rgb(218,38,40)" rx="2" ry="2" />
+<text  x="913.40" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.clear:249 (2 samples, 0.07%)</title><rect x="150.4" y="69" width="0.9" height="15.0" fill="rgb(214,107,38)" rx="2" ry="2" />
+<text  x="153.45" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3895 (18 samples, 0.66%)</title><rect x="968.1" y="85" width="7.8" height="15.0" fill="rgb(243,121,52)" rx="2" ry="2" />
+<text  x="971.13" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:189 (2 samples, 0.07%)</title><rect x="459.3" y="117" width="0.9" height="15.0" fill="rgb(235,92,15)" rx="2" ry="2" />
+<text  x="462.34" y="127.5" ></text>
+</g>
+<g >
+<title>java.lang.String.toUpperCase:3487 (270 samples, 9.86%)</title><rect x="1058.2" y="165" width="116.3" height="15.0" fill="rgb(243,184,15)" rx="2" ry="2" />
+<text  x="1061.17" y="175.5" >java.lang.Stri..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1497 (2 samples, 0.07%)</title><rect x="738.5" y="69" width="0.9" height="15.0" fill="rgb(227,69,2)" rx="2" ry="2" />
+<text  x="741.51" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1536 (2 samples, 0.07%)</title><rect x="250.0" y="69" width="0.8" height="15.0" fill="rgb(220,52,10)" rx="2" ry="2" />
+<text  x="252.96" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.Object.&lt;init&gt;:45 (3 samples, 0.11%)</title><rect x="596.3" y="101" width="1.3" height="15.0" fill="rgb(236,221,53)" rx="2" ry="2" />
+<text  x="599.34" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1470 (10 samples, 0.37%)</title><rect x="723.0" y="53" width="4.3" height="15.0" fill="rgb(223,144,12)" rx="2" ry="2" />
+<text  x="726.00" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.Object.&lt;init&gt;:45 (1 samples, 0.04%)</title><rect x="443.8" y="69" width="0.5" height="15.0" fill="rgb(231,113,23)" rx="2" ry="2" />
+<text  x="446.83" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:168 (4 samples, 0.15%)</title><rect x="456.8" y="101" width="1.7" height="15.0" fill="rgb(254,54,26)" rx="2" ry="2" />
+<text  x="459.75" y="111.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.&lt;init&gt;:100 (57 samples, 2.08%)</title><rect x="541.6" y="133" width="24.6" height="15.0" fill="rgb(241,17,22)" rx="2" ry="2" />
+<text  x="544.62" y="143.5" >j..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:165 (4 samples, 0.15%)</title><rect x="975.9" y="101" width="1.7" height="15.0" fill="rgb(219,214,40)" rx="2" ry="2" />
+<text  x="978.89" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1538 (5 samples, 0.18%)</title><rect x="773.4" y="69" width="2.2" height="15.0" fill="rgb(214,224,53)" rx="2" ry="2" />
+<text  x="776.40" y="79.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.profile.JavaFlightRecorderProfiler.execute:191 (1 samples, 0.04%)</title><rect x="1184.4" y="325" width="0.4" height="15.0" fill="rgb(246,214,6)" rx="2" ry="2" />
+<text  x="1187.40" y="335.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.getInt:4748 (2 samples, 0.07%)</title><rect x="989.2" y="101" width="0.9" height="15.0" fill="rgb(223,169,33)" rx="2" ry="2" />
+<text  x="992.24" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1473 (1 samples, 0.04%)</title><rect x="222.0" y="53" width="0.4" height="15.0" fill="rgb(253,65,46)" rx="2" ry="2" />
+<text  x="224.96" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:191 (14 samples, 0.51%)</title><rect x="979.3" y="117" width="6.1" height="15.0" fill="rgb(215,163,44)" rx="2" ry="2" />
+<text  x="982.33" y="127.5" ></text>
+</g>
+<g >
+<title>java.lang.String.coder:4559 (3 samples, 0.11%)</title><rect x="1006.5" y="53" width="1.3" height="15.0" fill="rgb(206,212,21)" rx="2" ry="2" />
+<text  x="1009.47" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4150 (68 samples, 2.48%)</title><rect x="603.2" y="133" width="29.3" height="15.0" fill="rgb(223,2,22)" rx="2" ry="2" />
+<text  x="606.23" y="143.5" >ja..</text>
+</g>
+<g >
+<title>java.lang.Long.toString:159 (17 samples, 0.62%)</title><rect x="1024.6" y="117" width="7.3" height="15.0" fill="rgb(214,170,17)" rx="2" ry="2" />
+<text  x="1027.57" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1139 (1 samples, 0.04%)</title><rect x="956.9" y="101" width="0.5" height="15.0" fill="rgb(219,1,36)" rx="2" ry="2" />
+<text  x="959.93" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:121 (3 samples, 0.11%)</title><rect x="630.4" y="117" width="1.3" height="15.0" fill="rgb(213,176,24)" rx="2" ry="2" />
+<text  x="633.37" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1192 (9 samples, 0.33%)</title><rect x="126.3" y="85" width="3.9" height="15.0" fill="rgb(248,117,33)" rx="2" ry="2" />
+<text  x="129.32" y="95.5" ></text>
+</g>
+<g >
+<title>java.lang.invoke.LambdaForm$MH+0x0000000800116000.1271325208.invokeExact_MT:-1 (2,707 samples, 98.83%)</title><rect x="10.0" y="293" width="1166.2" height="15.0" fill="rgb(208,191,9)" rx="2" ry="2" />
+<text  x="13.00" y="303.5" >java.lang.invoke.LambdaForm$MH+0x0000000800116000.1271325208.invokeExact_MT:-1</text>
+</g>
+<g >
+<title>org.openjdk.jmh.util.Utils.tryWith:507 (1 samples, 0.04%)</title><rect x="1184.4" y="309" width="0.4" height="15.0" fill="rgb(247,109,39)" rx="2" ry="2" />
+<text  x="1187.40" y="319.5" ></text>
+</g>
+<g >
+<title>jdk.internal.misc.Blocker.end:102 (1 samples, 0.04%)</title><rect x="1184.0" y="373" width="0.4" height="15.0" fill="rgb(210,62,18)" rx="2" ry="2" />
+<text  x="1186.97" y="383.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.newString:760 (2 samples, 0.07%)</title><rect x="472.3" y="101" width="0.8" height="15.0" fill="rgb(230,9,24)" rx="2" ry="2" />
+<text  x="475.26" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:121 (9 samples, 0.33%)</title><rect x="593.8" y="117" width="3.8" height="15.0" fill="rgb(225,69,42)" rx="2" ry="2" />
+<text  x="596.75" y="127.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine.run_requests:238 (14 samples, 0.51%)</title><rect x="1177.9" y="389" width="6.1" height="15.0" fill="rgb(230,184,9)" rx="2" ry="2" />
+<text  x="1180.94" y="399.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1554 (7 samples, 0.26%)</title><rect x="790.2" y="69" width="3.0" height="15.0" fill="rgb(250,16,31)" rx="2" ry="2" />
+<text  x="793.20" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1654 (29 samples, 1.06%)</title><rect x="387.8" y="69" width="12.5" height="15.0" fill="rgb(230,28,14)" rx="2" ry="2" />
+<text  x="390.82" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1531 (1 samples, 0.04%)</title><rect x="772.1" y="69" width="0.4" height="15.0" fill="rgb(235,216,54)" rx="2" ry="2" />
+<text  x="775.11" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:585 (1 samples, 0.04%)</title><rect x="521.8" y="101" width="0.4" height="15.0" fill="rgb(212,59,46)" rx="2" ry="2" />
+<text  x="524.81" y="111.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.ensureCapacityInternal:242 (7 samples, 0.26%)</title><rect x="1000.9" y="85" width="3.0" height="15.0" fill="rgb(234,26,12)" rx="2" ry="2" />
+<text  x="1003.87" y="95.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:582 (6 samples, 0.22%)</title><rect x="991.8" y="101" width="2.6" height="15.0" fill="rgb(206,104,10)" rx="2" ry="2" />
+<text  x="994.83" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1527 (7 samples, 0.26%)</title><rect x="765.2" y="69" width="3.0" height="15.0" fill="rgb(249,140,42)" rx="2" ry="2" />
+<text  x="768.22" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.unsignedLongCompare:1837 (1 samples, 0.04%)</title><rect x="907.0" y="53" width="0.4" height="15.0" fill="rgb(225,110,15)" rx="2" ry="2" />
+<text  x="909.96" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:191 (46 samples, 1.68%)</title><rect x="438.7" y="117" width="19.8" height="15.0" fill="rgb(245,77,38)" rx="2" ry="2" />
+<text  x="441.66" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1469 (5 samples, 0.18%)</title><rect x="740.7" y="53" width="2.1" height="15.0" fill="rgb(231,138,5)" rx="2" ry="2" />
+<text  x="743.66" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.String.length:1499 (5 samples, 0.18%)</title><rect x="473.6" y="85" width="2.1" height="15.0" fill="rgb(205,90,18)" rx="2" ry="2" />
+<text  x="476.56" y="95.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3823 (2 samples, 0.07%)</title><rect x="534.7" y="101" width="0.9" height="15.0" fill="rgb(237,48,15)" rx="2" ry="2" />
+<text  x="537.73" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getLowestSetBit:364 (4 samples, 0.15%)</title><rect x="166.4" y="69" width="1.7" height="15.0" fill="rgb(216,44,11)" rx="2" ry="2" />
+<text  x="169.39" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:525 (22 samples, 0.80%)</title><rect x="1071.1" y="149" width="9.5" height="15.0" fill="rgb(225,124,50)" rx="2" ry="2" />
+<text  x="1074.10" y="159.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:649 (5 samples, 0.18%)</title><rect x="395.6" y="53" width="2.1" height="15.0" fill="rgb(218,221,17)" rx="2" ry="2" />
+<text  x="398.58" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.String.coder:4559 (1 samples, 0.04%)</title><rect x="483.5" y="53" width="0.4" height="15.0" fill="rgb(235,186,22)" rx="2" ry="2" />
+<text  x="486.46" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:403 (2 samples, 0.07%)</title><rect x="435.6" y="53" width="0.9" height="15.0" fill="rgb(239,25,37)" rx="2" ry="2" />
+<text  x="438.64" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1486 (2 samples, 0.07%)</title><rect x="700.6" y="69" width="0.9" height="15.0" fill="rgb(248,4,25)" rx="2" ry="2" />
+<text  x="703.60" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1469 (3 samples, 0.11%)</title><rect x="192.7" y="53" width="1.3" height="15.0" fill="rgb(219,97,16)" rx="2" ry="2" />
+<text  x="195.67" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.String.getBytes:4472 (1 samples, 0.04%)</title><rect x="531.3" y="69" width="0.4" height="15.0" fill="rgb(225,156,34)" rx="2" ry="2" />
+<text  x="534.29" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1594 (12 samples, 0.44%)</title><rect x="337.8" y="69" width="5.2" height="15.0" fill="rgb(205,141,47)" rx="2" ry="2" />
+<text  x="340.85" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:402 (5 samples, 0.18%)</title><rect x="926.3" y="53" width="2.2" height="15.0" fill="rgb(242,184,24)" rx="2" ry="2" />
+<text  x="929.34" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1675 (44 samples, 1.61%)</title><rect x="925.0" y="69" width="19.0" height="15.0" fill="rgb(229,98,14)" rx="2" ry="2" />
+<text  x="928.05" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:165 (6 samples, 0.22%)</title><rect x="454.2" y="101" width="2.6" height="15.0" fill="rgb(234,203,41)" rx="2" ry="2" />
+<text  x="457.17" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1677 (6 samples, 0.22%)</title><rect x="434.4" y="69" width="2.5" height="15.0" fill="rgb(246,220,50)" rx="2" ry="2" />
+<text  x="437.35" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.getInt:4748 (1 samples, 0.04%)</title><rect x="471.4" y="101" width="0.4" height="15.0" fill="rgb(252,73,25)" rx="2" ry="2" />
+<text  x="474.40" y="111.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:509 (4 samples, 0.15%)</title><rect x="1059.0" y="149" width="1.8" height="15.0" fill="rgb(214,147,32)" rx="2" ry="2" />
+<text  x="1062.03" y="159.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4153 (17 samples, 0.62%)</title><rect x="978.0" y="133" width="7.4" height="15.0" fill="rgb(249,213,46)" rx="2" ry="2" />
+<text  x="981.04" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.ensureCapacityInternal:244 (1 samples, 0.04%)</title><rect x="1042.2" y="85" width="0.5" height="15.0" fill="rgb(229,136,23)" rx="2" ry="2" />
+<text  x="1045.23" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.unsignedLongCompare:1837 (4 samples, 0.15%)</title><rect x="336.1" y="53" width="1.7" height="15.0" fill="rgb(205,50,0)" rx="2" ry="2" />
+<text  x="339.13" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:164 (11 samples, 0.40%)</title><rect x="1033.6" y="117" width="4.8" height="15.0" fill="rgb(236,109,5)" rx="2" ry="2" />
+<text  x="1036.61" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:651 (3 samples, 0.11%)</title><rect x="886.3" y="53" width="1.3" height="15.0" fill="rgb(216,34,41)" rx="2" ry="2" />
+<text  x="889.28" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.putStringAt:1749 (5 samples, 0.18%)</title><rect x="527.4" y="85" width="2.2" height="15.0" fill="rgb(214,68,45)" rx="2" ry="2" />
+<text  x="530.41" y="95.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3537 (1 samples, 0.04%)</title><rect x="999.6" y="69" width="0.4" height="15.0" fill="rgb(206,158,23)" rx="2" ry="2" />
+<text  x="1002.58" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:168 (1 samples, 0.04%)</title><rect x="977.6" y="101" width="0.4" height="15.0" fill="rgb(237,214,7)" rx="2" ry="2" />
+<text  x="980.61" y="111.5" ></text>
+</g>
+<g >
+<title>java.lang.Number.&lt;init&gt;:59 (3 samples, 0.11%)</title><rect x="443.0" y="85" width="1.3" height="15.0" fill="rgb(227,60,7)" rx="2" ry="2" />
+<text  x="445.97" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:168 (3 samples, 0.11%)</title><rect x="984.1" y="101" width="1.3" height="15.0" fill="rgb(207,165,53)" rx="2" ry="2" />
+<text  x="987.07" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.bitLengthForInt:2727 (1 samples, 0.04%)</title><rect x="916.4" y="37" width="0.5" height="15.0" fill="rgb(227,89,2)" rx="2" ry="2" />
+<text  x="919.43" y="47.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1622 (2 samples, 0.07%)</title><rect x="370.6" y="69" width="0.9" height="15.0" fill="rgb(226,130,35)" rx="2" ry="2" />
+<text  x="373.59" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:648 (13 samples, 0.47%)</title><rect x="390.0" y="53" width="5.6" height="15.0" fill="rgb(251,51,33)" rx="2" ry="2" />
+<text  x="392.98" y="63.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BaseRunner.doSingle:138 (5 samples, 0.18%)</title><rect x="1184.4" y="421" width="2.2" height="15.0" fill="rgb(220,101,54)" rx="2" ry="2" />
+<text  x="1187.40" y="431.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1555 (118 samples, 4.31%)</title><rect x="793.2" y="69" width="50.9" height="15.0" fill="rgb(222,34,40)" rx="2" ry="2" />
+<text  x="796.22" y="79.5" >java...</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1492 (5 samples, 0.18%)</title><rect x="702.7" y="69" width="2.2" height="15.0" fill="rgb(253,67,3)" rx="2" ry="2" />
+<text  x="705.75" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:649 (2 samples, 0.07%)</title><rect x="909.5" y="53" width="0.9" height="15.0" fill="rgb(243,195,51)" rx="2" ry="2" />
+<text  x="912.54" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4160 (3 samples, 0.11%)</title><rect x="990.1" y="133" width="1.3" height="15.0" fill="rgb(222,120,22)" rx="2" ry="2" />
+<text  x="993.10" y="143.5" ></text>
+</g>
+<g >
+<title>jdk.internal.util.ArraysSupport.newLength:638 (1 samples, 0.04%)</title><rect x="1003.5" y="53" width="0.4" height="15.0" fill="rgb(205,128,4)" rx="2" ry="2" />
+<text  x="1006.46" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:123 (1 samples, 0.04%)</title><rect x="738.1" y="53" width="0.4" height="15.0" fill="rgb(222,69,23)" rx="2" ry="2" />
+<text  x="741.08" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1513 (1 samples, 0.04%)</title><rect x="764.4" y="69" width="0.4" height="15.0" fill="rgb(250,51,13)" rx="2" ry="2" />
+<text  x="767.36" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1494 (16 samples, 0.58%)</title><rect x="729.0" y="69" width="6.9" height="15.0" fill="rgb(222,20,45)" rx="2" ry="2" />
+<text  x="732.03" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1508 (3 samples, 0.11%)</title><rect x="224.1" y="69" width="1.3" height="15.0" fill="rgb(227,224,18)" rx="2" ry="2" />
+<text  x="227.11" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1470 (4 samples, 0.15%)</title><rect x="194.0" y="53" width="1.7" height="15.0" fill="rgb(225,214,39)" rx="2" ry="2" />
+<text  x="196.96" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4148 (19 samples, 0.69%)</title><rect x="584.3" y="133" width="8.2" height="15.0" fill="rgb(217,109,28)" rx="2" ry="2" />
+<text  x="587.28" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4133 (4 samples, 0.15%)</title><rect x="572.6" y="133" width="1.8" height="15.0" fill="rgb(221,150,28)" rx="2" ry="2" />
+<text  x="575.64" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1468 (43 samples, 1.57%)</title><rect x="174.1" y="53" width="18.6" height="15.0" fill="rgb(249,131,17)" rx="2" ry="2" />
+<text  x="177.14" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1232 (575 samples, 20.99%)</title><rect x="700.2" y="85" width="247.7" height="15.0" fill="rgb(205,207,40)" rx="2" ry="2" />
+<text  x="703.16" y="95.5" >java.math.MutableBigInteger.divi..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1192 (7 samples, 0.26%)</title><rect x="658.4" y="85" width="3.0" height="15.0" fill="rgb(225,126,4)" rx="2" ry="2" />
+<text  x="661.38" y="95.5" ></text>
+</g>
+<g >
+<title>org.sample.jmh_generated.BenchmarkPublicKeys_sm2p256v1_uncompressed_jmhTest.sm2p256v1_uncompressed_thrpt_jmhStub:121 (4 samples, 0.15%)</title><rect x="1174.5" y="229" width="1.7" height="15.0" fill="rgb(212,218,50)" rx="2" ry="2" />
+<text  x="1177.49" y="239.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.ensureCapacityInternal:241 (7 samples, 0.26%)</title><rect x="477.0" y="85" width="3.0" height="15.0" fill="rgb(206,113,17)" rx="2" ry="2" />
+<text  x="480.00" y="95.5" ></text>
+</g>
+<g >
+<title>org.sample.SM2Util.bigIntegerToHex:66 (1,198 samples, 43.74%)</title><rect x="539.0" y="181" width="516.2" height="15.0" fill="rgb(226,18,25)" rx="2" ry="2" />
+<text  x="542.04" y="191.5" >org.sample.SM2Util.bigIntegerToHex:66</text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4131 (1 samples, 0.04%)</title><rect x="44.9" y="133" width="0.4" height="15.0" fill="rgb(210,190,23)" rx="2" ry="2" />
+<text  x="47.90" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:147 (1 samples, 0.04%)</title><rect x="486.5" y="117" width="0.4" height="15.0" fill="rgb(253,146,28)" rx="2" ry="2" />
+<text  x="489.48" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.primitiveLeftShift:700 (3 samples, 0.11%)</title><rect x="403.3" y="37" width="1.3" height="15.0" fill="rgb(225,143,14)" rx="2" ry="2" />
+<text  x="406.33" y="47.5" ></text>
+</g>
+<g >
+<title>java.lang.CharacterDataLatin1.toUpperCaseEx:249 (11 samples, 0.40%)</title><rect x="1113.7" y="133" width="4.8" height="15.0" fill="rgb(216,214,46)" rx="2" ry="2" />
+<text  x="1116.75" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.String.coder:4559 (2 samples, 0.07%)</title><rect x="474.8" y="69" width="0.9" height="15.0" fill="rgb(222,127,40)" rx="2" ry="2" />
+<text  x="477.85" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3537 (1 samples, 0.04%)</title><rect x="479.2" y="69" width="0.4" height="15.0" fill="rgb(241,21,29)" rx="2" ry="2" />
+<text  x="482.16" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1605 (3 samples, 0.11%)</title><rect x="888.4" y="69" width="1.3" height="15.0" fill="rgb(231,90,30)" rx="2" ry="2" />
+<text  x="891.43" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1510 (9 samples, 0.33%)</title><rect x="225.4" y="69" width="3.9" height="15.0" fill="rgb(253,147,6)" rx="2" ry="2" />
+<text  x="228.41" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:587 (10 samples, 0.37%)</title><rect x="1003.9" y="101" width="4.3" height="15.0" fill="rgb(231,17,34)" rx="2" ry="2" />
+<text  x="1006.89" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.getInt:4745 (6 samples, 0.22%)</title><rect x="468.8" y="101" width="2.6" height="15.0" fill="rgb(216,112,18)" rx="2" ry="2" />
+<text  x="471.82" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:652 (1 samples, 0.04%)</title><rect x="887.6" y="53" width="0.4" height="15.0" fill="rgb(248,111,32)" rx="2" ry="2" />
+<text  x="890.57" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.inflateIfNeededFor:1732 (8 samples, 0.29%)</title><rect x="1043.5" y="69" width="3.5" height="15.0" fill="rgb(213,216,18)" rx="2" ry="2" />
+<text  x="1046.52" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:586 (7 samples, 0.26%)</title><rect x="1039.6" y="101" width="3.1" height="15.0" fill="rgb(247,178,43)" rx="2" ry="2" />
+<text  x="1042.65" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1502 (2 samples, 0.07%)</title><rect x="222.8" y="69" width="0.9" height="15.0" fill="rgb(250,217,33)" rx="2" ry="2" />
+<text  x="225.82" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:403 (2 samples, 0.07%)</title><rect x="947.0" y="53" width="0.9" height="15.0" fill="rgb(238,50,39)" rx="2" ry="2" />
+<text  x="950.02" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:585 (3 samples, 0.11%)</title><rect x="994.4" y="101" width="1.3" height="15.0" fill="rgb(234,94,17)" rx="2" ry="2" />
+<text  x="997.41" y="111.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3823 (8 samples, 0.29%)</title><rect x="1034.9" y="85" width="3.5" height="15.0" fill="rgb(251,227,7)" rx="2" ry="2" />
+<text  x="1037.91" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4151 (732 samples, 26.73%)</title><rect x="632.5" y="133" width="315.4" height="15.0" fill="rgb(210,29,46)" rx="2" ry="2" />
+<text  x="635.53" y="143.5" >java.math.BigInteger.smallToString:4151</text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.ensureCapacityInternal:241 (4 samples, 0.15%)</title><rect x="1039.6" y="85" width="1.8" height="15.0" fill="rgb(223,69,15)" rx="2" ry="2" />
+<text  x="1042.65" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1496 (2 samples, 0.07%)</title><rect x="737.6" y="69" width="0.9" height="15.0" fill="rgb(233,43,1)" rx="2" ry="2" />
+<text  x="740.65" y="79.5" ></text>
+</g>
+<g >
+<title>java.io.BufferedInputStream.fill:255 (4 samples, 0.15%)</title><rect x="1188.3" y="389" width="1.7" height="15.0" fill="rgb(252,49,38)" rx="2" ry="2" />
+<text  x="1191.28" y="399.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toString:4092 (67 samples, 2.45%)</title><rect x="539.9" y="165" width="28.9" height="15.0" fill="rgb(229,153,53)" rx="2" ry="2" />
+<text  x="542.90" y="175.5" >ja..</text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.putStringAt:1749 (10 samples, 0.37%)</title><rect x="1042.7" y="85" width="4.3" height="15.0" fill="rgb(230,19,49)" rx="2" ry="2" />
+<text  x="1045.66" y="95.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3538 (1 samples, 0.04%)</title><rect x="479.6" y="69" width="0.4" height="15.0" fill="rgb(210,173,2)" rx="2" ry="2" />
+<text  x="482.59" y="79.5" ></text>
+</g>
+<g >
+<title>java.io.FileInputStream.read:293 (4 samples, 0.15%)</title><rect x="1188.3" y="373" width="1.7" height="15.0" fill="rgb(213,43,23)" rx="2" ry="2" />
+<text  x="1191.28" y="383.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:141 (38 samples, 1.39%)</title><rect x="665.7" y="69" width="16.4" height="15.0" fill="rgb(253,183,12)" rx="2" ry="2" />
+<text  x="668.70" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:391 (2 samples, 0.07%)</title><rect x="925.0" y="53" width="0.9" height="15.0" fill="rgb(210,165,48)" rx="2" ry="2" />
+<text  x="928.05" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1578 (16 samples, 0.58%)</title><rect x="852.7" y="69" width="6.9" height="15.0" fill="rgb(209,162,34)" rx="2" ry="2" />
+<text  x="855.67" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1220 (38 samples, 1.39%)</title><rect x="151.7" y="85" width="16.4" height="15.0" fill="rgb(211,128,2)" rx="2" ry="2" />
+<text  x="154.74" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1598 (1 samples, 0.04%)</title><rect x="888.0" y="69" width="0.4" height="15.0" fill="rgb(254,224,4)" rx="2" ry="2" />
+<text  x="891.00" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1550 (8 samples, 0.29%)</title><rect x="783.7" y="69" width="3.5" height="15.0" fill="rgb(206,200,54)" rx="2" ry="2" />
+<text  x="786.74" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.StringBuilder.append:179 (18 samples, 0.66%)</title><rect x="1039.6" y="117" width="7.8" height="15.0" fill="rgb(219,152,53)" rx="2" ry="2" />
+<text  x="1042.65" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4170 (1 samples, 0.04%)</title><rect x="486.0" y="133" width="0.5" height="15.0" fill="rgb(229,201,4)" rx="2" ry="2" />
+<text  x="489.05" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1220 (31 samples, 1.13%)</title><rect x="686.8" y="85" width="13.4" height="15.0" fill="rgb(213,45,27)" rx="2" ry="2" />
+<text  x="689.81" y="95.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BaseRunner.runBenchmark:233 (5 samples, 0.18%)</title><rect x="1184.4" y="405" width="2.2" height="15.0" fill="rgb(221,227,42)" rx="2" ry="2" />
+<text  x="1187.40" y="415.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1495 (3 samples, 0.11%)</title><rect x="206.0" y="69" width="1.3" height="15.0" fill="rgb(209,44,17)" rx="2" ry="2" />
+<text  x="209.02" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3894 (1 samples, 0.04%)</title><rect x="981.5" y="85" width="0.4" height="15.0" fill="rgb(228,53,18)" rx="2" ry="2" />
+<text  x="984.49" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1491 (3 samples, 0.11%)</title><rect x="169.4" y="69" width="1.3" height="15.0" fill="rgb(246,51,36)" rx="2" ry="2" />
+<text  x="172.40" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1473 (1 samples, 0.04%)</title><rect x="728.6" y="53" width="0.4" height="15.0" fill="rgb(227,38,19)" rx="2" ry="2" />
+<text  x="731.60" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.primitiveLeftShift:703 (3 samples, 0.11%)</title><rect x="923.3" y="37" width="1.3" height="15.0" fill="rgb(219,134,18)" rx="2" ry="2" />
+<text  x="926.33" y="47.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1553 (7 samples, 0.26%)</title><rect x="265.0" y="69" width="3.1" height="15.0" fill="rgb(209,199,42)" rx="2" ry="2" />
+<text  x="268.04" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:553 (1 samples, 0.04%)</title><rect x="924.6" y="53" width="0.4" height="15.0" fill="rgb(211,91,31)" rx="2" ry="2" />
+<text  x="927.62" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.putStringAt:1750 (6 samples, 0.22%)</title><rect x="1005.6" y="85" width="2.6" height="15.0" fill="rgb(241,40,54)" rx="2" ry="2" />
+<text  x="1008.61" y="95.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3822 (3 samples, 0.11%)</title><rect x="1033.6" y="85" width="1.3" height="15.0" fill="rgb(228,95,29)" rx="2" ry="2" />
+<text  x="1036.61" y="95.5" ></text>
+</g>
+<g >
+<title>java.security.spec.ECPoint.getAffineX:77 (4 samples, 0.15%)</title><rect x="11.7" y="181" width="1.7" height="15.0" fill="rgb(251,164,24)" rx="2" ry="2" />
+<text  x="14.72" y="191.5" ></text>
+</g>
+<g >
+<title>java.lang.StringBuilder.&lt;init&gt;:119 (63 samples, 2.30%)</title><rect x="541.6" y="149" width="27.2" height="15.0" fill="rgb(244,177,36)" rx="2" ry="2" />
+<text  x="544.62" y="159.5" >j..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1542 (2 samples, 0.07%)</title><rect x="776.0" y="69" width="0.8" height="15.0" fill="rgb(220,41,15)" rx="2" ry="2" />
+<text  x="778.99" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1207 (1 samples, 0.04%)</title><rect x="151.3" y="85" width="0.4" height="15.0" fill="rgb(252,17,27)" rx="2" ry="2" />
+<text  x="154.31" y="95.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.ensureCapacityInternal:241 (5 samples, 0.18%)</title><rect x="522.7" y="85" width="2.1" height="15.0" fill="rgb(247,148,48)" rx="2" ry="2" />
+<text  x="525.67" y="95.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:155 (1 samples, 0.04%)</title><rect x="1009.1" y="117" width="0.4" height="15.0" fill="rgb(214,207,24)" rx="2" ry="2" />
+<text  x="1012.06" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:403 (33 samples, 1.20%)</title><rect x="928.5" y="53" width="14.2" height="15.0" fill="rgb(242,45,10)" rx="2" ry="2" />
+<text  x="931.50" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4140 (4 samples, 0.15%)</title><rect x="582.6" y="133" width="1.7" height="15.0" fill="rgb(215,148,26)" rx="2" ry="2" />
+<text  x="585.55" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.String.getBytes:4471 (4 samples, 0.15%)</title><rect x="1006.0" y="69" width="1.8" height="15.0" fill="rgb(207,181,46)" rx="2" ry="2" />
+<text  x="1009.04" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3538 (2 samples, 0.07%)</title><rect x="1000.0" y="69" width="0.9" height="15.0" fill="rgb(240,90,48)" rx="2" ry="2" />
+<text  x="1003.01" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.String.getBytes:4472 (5 samples, 0.18%)</title><rect x="483.9" y="69" width="2.1" height="15.0" fill="rgb(245,103,13)" rx="2" ry="2" />
+<text  x="486.90" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:123 (2 samples, 0.07%)</title><rect x="631.7" y="117" width="0.8" height="15.0" fill="rgb(253,35,18)" rx="2" ry="2" />
+<text  x="634.66" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4163 (1 samples, 0.04%)</title><rect x="991.4" y="133" width="0.4" height="15.0" fill="rgb(234,218,49)" rx="2" ry="2" />
+<text  x="994.39" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1473 (2 samples, 0.07%)</title><rect x="199.1" y="53" width="0.9" height="15.0" fill="rgb(237,138,16)" rx="2" ry="2" />
+<text  x="202.13" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:397 (3 samples, 0.11%)</title><rect x="415.8" y="53" width="1.3" height="15.0" fill="rgb(237,113,32)" rx="2" ry="2" />
+<text  x="418.83" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1495 (4 samples, 0.15%)</title><rect x="735.9" y="69" width="1.7" height="15.0" fill="rgb(216,76,20)" rx="2" ry="2" />
+<text  x="738.92" y="79.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler.stopProfilers:260 (4 samples, 0.15%)</title><rect x="1184.8" y="357" width="1.8" height="15.0" fill="rgb(210,36,38)" rx="2" ry="2" />
+<text  x="1187.83" y="367.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BaseRunner.runBenchmarksForked:75 (5 samples, 0.18%)</title><rect x="1184.4" y="437" width="2.2" height="15.0" fill="rgb(229,140,29)" rx="2" ry="2" />
+<text  x="1187.40" y="447.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:586 (12 samples, 0.44%)</title><rect x="522.2" y="101" width="5.2" height="15.0" fill="rgb(230,227,35)" rx="2" ry="2" />
+<text  x="525.24" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4160 (3 samples, 0.11%)</title><rect x="471.8" y="133" width="1.3" height="15.0" fill="rgb(246,52,11)" rx="2" ry="2" />
+<text  x="474.83" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.StringBuilder.toString:453 (6 samples, 0.22%)</title><rect x="533.0" y="149" width="2.6" height="15.0" fill="rgb(206,78,37)" rx="2" ry="2" />
+<text  x="536.01" y="159.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4163 (1 samples, 0.04%)</title><rect x="473.1" y="133" width="0.5" height="15.0" fill="rgb(232,129,33)" rx="2" ry="2" />
+<text  x="476.13" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:164 (4 samples, 0.15%)</title><rect x="466.2" y="101" width="1.8" height="15.0" fill="rgb(225,115,12)" rx="2" ry="2" />
+<text  x="469.23" y="111.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3895 (4 samples, 0.15%)</title><rect x="981.9" y="85" width="1.7" height="15.0" fill="rgb(211,77,7)" rx="2" ry="2" />
+<text  x="984.92" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4139 (19 samples, 0.69%)</title><rect x="574.4" y="133" width="8.2" height="15.0" fill="rgb(237,36,23)" rx="2" ry="2" />
+<text  x="577.37" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1623 (27 samples, 0.99%)</title><rect x="371.5" y="69" width="11.6" height="15.0" fill="rgb(217,127,21)" rx="2" ry="2" />
+<text  x="374.45" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:141 (36 samples, 1.31%)</title><rect x="132.8" y="69" width="15.5" height="15.0" fill="rgb(234,140,14)" rx="2" ry="2" />
+<text  x="135.78" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4155 (11 samples, 0.40%)</title><rect x="985.4" y="133" width="4.7" height="15.0" fill="rgb(252,218,12)" rx="2" ry="2" />
+<text  x="988.36" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:102 (2 samples, 0.07%)</title><rect x="584.3" y="117" width="0.8" height="15.0" fill="rgb(212,62,17)" rx="2" ry="2" />
+<text  x="587.28" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1467 (1 samples, 0.04%)</title><rect x="173.7" y="53" width="0.4" height="15.0" fill="rgb(224,205,35)" rx="2" ry="2" />
+<text  x="176.71" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1501 (1 samples, 0.04%)</title><rect x="222.4" y="69" width="0.4" height="15.0" fill="rgb(213,177,39)" rx="2" ry="2" />
+<text  x="225.39" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.compare:265 (7 samples, 0.26%)</title><rect x="658.4" y="69" width="3.0" height="15.0" fill="rgb(254,66,53)" rx="2" ry="2" />
+<text  x="661.38" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.getInt:4745 (6 samples, 0.22%)</title><rect x="985.4" y="101" width="2.5" height="15.0" fill="rgb(223,91,4)" rx="2" ry="2" />
+<text  x="988.36" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1578 (16 samples, 0.58%)</title><rect x="323.6" y="69" width="6.9" height="15.0" fill="rgb(224,215,18)" rx="2" ry="2" />
+<text  x="326.63" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1471 (8 samples, 0.29%)</title><rect x="195.7" y="53" width="3.4" height="15.0" fill="rgb(241,182,24)" rx="2" ry="2" />
+<text  x="198.68" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:402 (14 samples, 0.51%)</title><rect x="417.1" y="53" width="6.1" height="15.0" fill="rgb(253,130,44)" rx="2" ry="2" />
+<text  x="420.12" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4153 (24 samples, 0.88%)</title><rect x="458.5" y="133" width="10.3" height="15.0" fill="rgb(249,74,39)" rx="2" ry="2" />
+<text  x="461.48" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4172 (69 samples, 2.52%)</title><rect x="1008.6" y="133" width="29.8" height="15.0" fill="rgb(243,33,54)" rx="2" ry="2" />
+<text  x="1011.63" y="143.5" >ja..</text>
+</g>
+<g >
+<title>java.lang.StringBuilder.append:179 (38 samples, 1.39%)</title><rect x="991.8" y="117" width="16.4" height="15.0" fill="rgb(209,175,12)" rx="2" ry="2" />
+<text  x="994.83" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.unsignedLongCompare:1837 (5 samples, 0.18%)</title><rect x="864.3" y="53" width="2.2" height="15.0" fill="rgb(244,30,11)" rx="2" ry="2" />
+<text  x="867.30" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.String.length:1499 (3 samples, 0.11%)</title><rect x="994.4" y="85" width="1.3" height="15.0" fill="rgb(223,131,11)" rx="2" ry="2" />
+<text  x="997.41" y="95.5" ></text>
+</g>
+<g >
+<title>java.lang.Object.&lt;init&gt;:45 (2 samples, 0.07%)</title><rect x="59.5" y="101" width="0.9" height="15.0" fill="rgb(223,97,34)" rx="2" ry="2" />
+<text  x="62.54" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1613 (3 samples, 0.11%)</title><rect x="368.4" y="69" width="1.3" height="15.0" fill="rgb(218,51,48)" rx="2" ry="2" />
+<text  x="371.44" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4140 (10 samples, 0.37%)</title><rect x="54.4" y="133" width="4.3" height="15.0" fill="rgb(236,88,11)" rx="2" ry="2" />
+<text  x="57.37" y="143.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.FutureTask.run:317 (2,707 samples, 98.83%)</title><rect x="10.0" y="389" width="1166.2" height="15.0" fill="rgb(233,101,52)" rx="2" ry="2" />
+<text  x="13.00" y="399.5" >java.util.concurrent.FutureTask.run:317</text>
+</g>
+<g >
+<title>java.lang.String.coder:4559 (2 samples, 0.07%)</title><rect x="994.8" y="69" width="0.9" height="15.0" fill="rgb(243,204,41)" rx="2" ry="2" />
+<text  x="997.84" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1547 (15 samples, 0.55%)</title><rect x="256.0" y="69" width="6.5" height="15.0" fill="rgb(219,125,2)" rx="2" ry="2" />
+<text  x="258.99" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:650 (12 samples, 0.44%)</title><rect x="360.7" y="53" width="5.2" height="15.0" fill="rgb(227,156,14)" rx="2" ry="2" />
+<text  x="363.68" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1140 (9 samples, 0.33%)</title><rect x="957.4" y="101" width="3.8" height="15.0" fill="rgb(212,214,31)" rx="2" ry="2" />
+<text  x="960.36" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4177 (26 samples, 0.95%)</title><rect x="520.5" y="133" width="11.2" height="15.0" fill="rgb(249,148,7)" rx="2" ry="2" />
+<text  x="523.51" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:140 (1 samples, 0.04%)</title><rect x="665.3" y="69" width="0.4" height="15.0" fill="rgb(251,93,30)" rx="2" ry="2" />
+<text  x="668.27" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1563 (2 samples, 0.07%)</title><rect x="850.5" y="69" width="0.9" height="15.0" fill="rgb(248,137,25)" rx="2" ry="2" />
+<text  x="853.52" y="79.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BaseRunner.runBenchmark:281 (5 samples, 0.18%)</title><rect x="1184.4" y="389" width="2.2" height="15.0" fill="rgb(220,82,12)" rx="2" ry="2" />
+<text  x="1187.40" y="399.5" ></text>
+</g>
+<g >
+<title>java.lang.StringBuilder.append:179 (23 samples, 0.84%)</title><rect x="521.8" y="117" width="9.9" height="15.0" fill="rgb(211,48,11)" rx="2" ry="2" />
+<text  x="524.81" y="127.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.fill:3181 (3 samples, 0.11%)</title><rect x="975.9" y="85" width="1.3" height="15.0" fill="rgb(223,151,51)" rx="2" ry="2" />
+<text  x="978.89" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1196 (51 samples, 1.86%)</title><rect x="661.4" y="85" width="22.0" height="15.0" fill="rgb(226,181,29)" rx="2" ry="2" />
+<text  x="664.39" y="95.5" >j..</text>
+</g>
+<g >
+<title>java.io.FileInputStream.readBytes:-1 (4 samples, 0.15%)</title><rect x="1188.3" y="357" width="1.7" height="15.0" fill="rgb(239,135,39)" rx="2" ry="2" />
+<text  x="1191.28" y="367.5" ></text>
+</g>
+<g >
+<title>java.lang.String.toUpperCase:3511 (270 samples, 9.86%)</title><rect x="1058.2" y="181" width="116.3" height="15.0" fill="rgb(232,150,24)" rx="2" ry="2" />
+<text  x="1061.17" y="191.5" >java.lang.Stri..</text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.periodicTask:500 (1 samples, 0.04%)</title><rect x="1177.5" y="421" width="0.4" height="15.0" fill="rgb(226,63,22)" rx="2" ry="2" />
+<text  x="1180.51" y="431.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getLowestSetBit:356 (1 samples, 0.04%)</title><rect x="154.8" y="69" width="0.4" height="15.0" fill="rgb(241,37,52)" rx="2" ry="2" />
+<text  x="157.75" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.primitiveLeftShift:701 (7 samples, 0.26%)</title><rect x="918.6" y="37" width="3.0" height="15.0" fill="rgb(241,197,51)" rx="2" ry="2" />
+<text  x="921.59" y="47.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3892 (2 samples, 0.07%)</title><rect x="145.7" y="53" width="0.9" height="15.0" fill="rgb(237,11,27)" rx="2" ry="2" />
+<text  x="148.71" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.putStringAt:1750 (7 samples, 0.26%)</title><rect x="483.0" y="85" width="3.0" height="15.0" fill="rgb(213,43,34)" rx="2" ry="2" />
+<text  x="486.03" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divide:1152 (801 samples, 29.24%)</title><rect x="91.9" y="117" width="345.0" height="15.0" fill="rgb(237,18,38)" rx="2" ry="2" />
+<text  x="94.85" y="127.5" >java.math.MutableBigInteger.divide:1152</text>
+</g>
+<g >
+<title>org.sample.SM2Util.getHexPublicKeyUncompressed:56 (1,206 samples, 44.03%)</title><rect x="535.6" y="197" width="519.6" height="15.0" fill="rgb(231,49,22)" rx="2" ry="2" />
+<text  x="538.59" y="207.5" >org.sample.SM2Util.getHexPublicKeyUncompressed:56</text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.periodicTask:499 (3 samples, 0.11%)</title><rect x="1176.2" y="421" width="1.3" height="15.0" fill="rgb(244,133,51)" rx="2" ry="2" />
+<text  x="1179.21" y="431.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1493 (56 samples, 2.04%)</title><rect x="704.9" y="69" width="24.1" height="15.0" fill="rgb(223,131,1)" rx="2" ry="2" />
+<text  x="707.90" y="79.5" >j..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1674 (29 samples, 1.06%)</title><rect x="912.6" y="69" width="12.4" height="15.0" fill="rgb(227,128,45)" rx="2" ry="2" />
+<text  x="915.56" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:407 (1 samples, 0.04%)</title><rect x="436.5" y="53" width="0.4" height="15.0" fill="rgb(243,218,17)" rx="2" ry="2" />
+<text  x="439.51" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.putStringAt:1750 (1 samples, 0.04%)</title><rect x="1047.0" y="85" width="0.4" height="15.0" fill="rgb(218,96,21)" rx="2" ry="2" />
+<text  x="1049.97" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1138 (6 samples, 0.22%)</title><rect x="460.2" y="101" width="2.6" height="15.0" fill="rgb(221,191,44)" rx="2" ry="2" />
+<text  x="463.20" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.primitiveLeftShift:700 (2 samples, 0.07%)</title><rect x="917.7" y="37" width="0.9" height="15.0" fill="rgb(211,85,0)" rx="2" ry="2" />
+<text  x="920.73" y="47.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1553 (7 samples, 0.26%)</title><rect x="787.2" y="69" width="3.0" height="15.0" fill="rgb(235,135,7)" rx="2" ry="2" />
+<text  x="790.19" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:189 (2 samples, 0.07%)</title><rect x="951.8" y="117" width="0.8" height="15.0" fill="rgb(224,164,49)" rx="2" ry="2" />
+<text  x="954.76" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1550 (6 samples, 0.22%)</title><rect x="262.5" y="69" width="2.5" height="15.0" fill="rgb(219,24,16)" rx="2" ry="2" />
+<text  x="265.46" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:161 (4 samples, 0.15%)</title><rect x="1031.9" y="117" width="1.7" height="15.0" fill="rgb(253,14,52)" rx="2" ry="2" />
+<text  x="1034.89" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1539 (1 samples, 0.04%)</title><rect x="775.6" y="69" width="0.4" height="15.0" fill="rgb(242,151,13)" rx="2" ry="2" />
+<text  x="778.56" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:189 (1 samples, 0.04%)</title><rect x="438.2" y="117" width="0.5" height="15.0" fill="rgb(205,111,46)" rx="2" ry="2" />
+<text  x="441.23" y="127.5" ></text>
+</g>
+<g >
+<title>jdk.internal.util.ArraysSupport.newLength:638 (1 samples, 0.04%)</title><rect x="480.9" y="53" width="0.4" height="15.0" fill="rgb(213,53,9)" rx="2" ry="2" />
+<text  x="483.88" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.newString:763 (6 samples, 0.22%)</title><rect x="517.9" y="101" width="2.6" height="15.0" fill="rgb(236,148,9)" rx="2" ry="2" />
+<text  x="520.93" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1594 (8 samples, 0.29%)</title><rect x="866.5" y="69" width="3.4" height="15.0" fill="rgb(250,224,18)" rx="2" ry="2" />
+<text  x="869.46" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1616 (1 samples, 0.04%)</title><rect x="891.0" y="69" width="0.4" height="15.0" fill="rgb(213,30,1)" rx="2" ry="2" />
+<text  x="894.01" y="79.5" ></text>
+</g>
+<g >
+<title>jdk.internal.reflect.DirectMethodHandleAccessor.invoke:104 (2,707 samples, 98.83%)</title><rect x="10.0" y="325" width="1166.2" height="15.0" fill="rgb(229,106,28)" rx="2" ry="2" />
+<text  x="13.00" y="335.5" >jdk.internal.reflect.DirectMethodHandleAccessor.invoke:104</text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:586 (19 samples, 0.69%)</title><rect x="995.7" y="101" width="8.2" height="15.0" fill="rgb(253,176,26)" rx="2" ry="2" />
+<text  x="998.70" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1623 (30 samples, 1.10%)</title><rect x="891.9" y="69" width="12.9" height="15.0" fill="rgb(249,209,9)" rx="2" ry="2" />
+<text  x="894.88" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:406 (3 samples, 0.11%)</title><rect x="942.7" y="53" width="1.3" height="15.0" fill="rgb(229,151,20)" rx="2" ry="2" />
+<text  x="945.71" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:123 (4 samples, 0.15%)</title><rect x="601.5" y="117" width="1.7" height="15.0" fill="rgb(252,62,31)" rx="2" ry="2" />
+<text  x="604.51" y="127.5" ></text>
+</g>
+<g >
+<title>java.lang.Number.&lt;init&gt;:59 (6 samples, 0.22%)</title><rect x="460.2" y="85" width="2.6" height="15.0" fill="rgb(206,25,18)" rx="2" ry="2" />
+<text  x="463.20" y="95.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler.startProfilers:249 (1 samples, 0.04%)</title><rect x="1184.4" y="357" width="0.4" height="15.0" fill="rgb(238,107,28)" rx="2" ry="2" />
+<text  x="1187.40" y="367.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1138 (4 samples, 0.15%)</title><rect x="442.5" y="101" width="1.8" height="15.0" fill="rgb(208,101,34)" rx="2" ry="2" />
+<text  x="445.54" y="111.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3822 (1 samples, 0.04%)</title><rect x="1052.1" y="101" width="0.5" height="15.0" fill="rgb(227,180,43)" rx="2" ry="2" />
+<text  x="1055.14" y="111.5" ></text>
+</g>
+<g >
+<title>java.io.BufferedInputStream.read1:310 (4 samples, 0.15%)</title><rect x="1188.3" y="405" width="1.7" height="15.0" fill="rgb(222,207,21)" rx="2" ry="2" />
+<text  x="1191.28" y="415.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1510 (12 samples, 0.44%)</title><rect x="754.4" y="69" width="5.2" height="15.0" fill="rgb(229,149,1)" rx="2" ry="2" />
+<text  x="757.45" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3891 (1 samples, 0.04%)</title><rect x="678.6" y="53" width="0.5" height="15.0" fill="rgb(249,174,24)" rx="2" ry="2" />
+<text  x="681.62" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:191 (20 samples, 0.73%)</title><rect x="460.2" y="117" width="8.6" height="15.0" fill="rgb(239,53,3)" rx="2" ry="2" />
+<text  x="463.20" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:68 (4 samples, 0.15%)</title><rect x="148.3" y="69" width="1.7" height="15.0" fill="rgb(210,229,25)" rx="2" ry="2" />
+<text  x="151.29" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getLowestSetBit:361 (8 samples, 0.29%)</title><rect x="162.9" y="69" width="3.5" height="15.0" fill="rgb(224,13,17)" rx="2" ry="2" />
+<text  x="165.94" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3538 (3 samples, 0.11%)</title><rect x="523.5" y="69" width="1.3" height="15.0" fill="rgb(225,218,28)" rx="2" ry="2" />
+<text  x="526.53" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.String.&lt;init&gt;:4534 (6 samples, 0.22%)</title><rect x="533.0" y="117" width="2.6" height="15.0" fill="rgb(224,82,12)" rx="2" ry="2" />
+<text  x="536.01" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1621 (2 samples, 0.07%)</title><rect x="369.7" y="69" width="0.9" height="15.0" fill="rgb(246,213,43)" rx="2" ry="2" />
+<text  x="372.73" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4133 (1 samples, 0.04%)</title><rect x="45.3" y="133" width="0.5" height="15.0" fill="rgb(234,64,21)" rx="2" ry="2" />
+<text  x="48.33" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.String.isLatin1:4567 (1 samples, 0.04%)</title><rect x="1058.6" y="149" width="0.4" height="15.0" fill="rgb(218,60,46)" rx="2" ry="2" />
+<text  x="1061.60" y="159.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine$RequestHook.execute:69 (13 samples, 0.47%)</title><rect x="1178.4" y="373" width="5.6" height="15.0" fill="rgb(216,163,37)" rx="2" ry="2" />
+<text  x="1181.37" y="383.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1469 (4 samples, 0.15%)</title><rect x="212.5" y="53" width="1.7" height="15.0" fill="rgb(240,220,0)" rx="2" ry="2" />
+<text  x="215.48" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1637 (1 samples, 0.04%)</title><rect x="907.0" y="69" width="0.4" height="15.0" fill="rgb(243,156,50)" rx="2" ry="2" />
+<text  x="909.96" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1467 (1 samples, 0.04%)</title><rect x="740.2" y="53" width="0.5" height="15.0" fill="rgb(215,8,52)" rx="2" ry="2" />
+<text  x="743.23" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1674 (33 samples, 1.20%)</title><rect x="400.7" y="69" width="14.3" height="15.0" fill="rgb(228,112,43)" rx="2" ry="2" />
+<text  x="403.75" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1471 (8 samples, 0.29%)</title><rect x="218.5" y="53" width="3.5" height="15.0" fill="rgb(241,153,46)" rx="2" ry="2" />
+<text  x="221.51" y="63.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder$$Lambda$113+0x000000080017a690.1519956952.run:-1 (19 samples, 0.69%)</title><rect x="1176.2" y="453" width="8.2" height="15.0" fill="rgb(253,131,24)" rx="2" ry="2" />
+<text  x="1179.21" y="463.5" ></text>
+</g>
+<g >
+<title>java.lang.Object.wait:373 (1 samples, 0.04%)</title><rect x="1184.0" y="389" width="0.4" height="15.0" fill="rgb(226,158,35)" rx="2" ry="2" />
+<text  x="1186.97" y="399.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1595 (42 samples, 1.53%)</title><rect x="869.9" y="69" width="18.1" height="15.0" fill="rgb(240,53,21)" rx="2" ry="2" />
+<text  x="872.91" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:164 (2 samples, 0.07%)</title><rect x="472.3" y="117" width="0.8" height="15.0" fill="rgb(211,74,1)" rx="2" ry="2" />
+<text  x="475.26" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1196 (46 samples, 1.68%)</title><rect x="130.2" y="85" width="19.8" height="15.0" fill="rgb(236,18,51)" rx="2" ry="2" />
+<text  x="133.20" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1187 (7 samples, 0.26%)</title><rect x="123.3" y="85" width="3.0" height="15.0" fill="rgb(246,43,23)" rx="2" ry="2" />
+<text  x="126.30" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1513 (5 samples, 0.18%)</title><rect x="233.6" y="69" width="2.1" height="15.0" fill="rgb(251,9,2)" rx="2" ry="2" />
+<text  x="236.59" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1138 (2 samples, 0.07%)</title><rect x="956.1" y="101" width="0.8" height="15.0" fill="rgb(237,32,15)" rx="2" ry="2" />
+<text  x="959.07" y="111.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3894 (5 samples, 0.18%)</title><rect x="679.1" y="53" width="2.1" height="15.0" fill="rgb(227,7,37)" rx="2" ry="2" />
+<text  x="682.05" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.newString:763 (1 samples, 0.04%)</title><rect x="991.0" y="101" width="0.4" height="15.0" fill="rgb(217,216,38)" rx="2" ry="2" />
+<text  x="993.96" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toString:4204 (1,134 samples, 41.40%)</title><rect x="43.2" y="149" width="488.5" height="15.0" fill="rgb(211,30,0)" rx="2" ry="2" />
+<text  x="46.17" y="159.5" >java.math.BigInteger.toString:4204</text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4152 (50 samples, 1.83%)</title><rect x="436.9" y="133" width="21.6" height="15.0" fill="rgb(206,61,11)" rx="2" ry="2" />
+<text  x="439.94" y="143.5" >j..</text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.periodicTask:503 (14 samples, 0.51%)</title><rect x="1177.9" y="421" width="6.1" height="15.0" fill="rgb(227,45,49)" rx="2" ry="2" />
+<text  x="1180.94" y="431.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.bitLength:3837 (1 samples, 0.04%)</title><rect x="13.4" y="149" width="0.5" height="15.0" fill="rgb(206,104,34)" rx="2" ry="2" />
+<text  x="16.45" y="159.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler.runIteration:325 (1 samples, 0.04%)</title><rect x="1184.4" y="373" width="0.4" height="15.0" fill="rgb(254,74,29)" rx="2" ry="2" />
+<text  x="1187.40" y="383.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.newCapacity:262 (1 samples, 0.04%)</title><rect x="1041.4" y="69" width="0.4" height="15.0" fill="rgb(209,4,1)" rx="2" ry="2" />
+<text  x="1044.37" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:139 (1 samples, 0.04%)</title><rect x="131.9" y="69" width="0.5" height="15.0" fill="rgb(240,44,19)" rx="2" ry="2" />
+<text  x="134.92" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:164 (22 samples, 0.80%)</title><rect x="966.4" y="101" width="9.5" height="15.0" fill="rgb(223,89,1)" rx="2" ry="2" />
+<text  x="969.41" y="111.5" ></text>
+</g>
+<g >
+<title>java.lang.StringBuilder.toString:453 (13 samples, 0.47%)</title><rect x="1049.6" y="149" width="5.6" height="15.0" fill="rgb(235,210,2)" rx="2" ry="2" />
+<text  x="1052.55" y="159.5" ></text>
+</g>
+<g >
+<title>java.lang.Object.&lt;init&gt;:45 (2 samples, 0.07%)</title><rect x="584.3" y="101" width="0.8" height="15.0" fill="rgb(234,171,45)" rx="2" ry="2" />
+<text  x="587.28" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1624 (1 samples, 0.04%)</title><rect x="904.8" y="69" width="0.4" height="15.0" fill="rgb(206,128,2)" rx="2" ry="2" />
+<text  x="907.80" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1469 (3 samples, 0.11%)</title><rect x="721.7" y="53" width="1.3" height="15.0" fill="rgb(251,193,11)" rx="2" ry="2" />
+<text  x="724.71" y="63.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.JVM.emitEvent:-1 (13 samples, 0.47%)</title><rect x="1178.4" y="357" width="5.6" height="15.0" fill="rgb(212,140,38)" rx="2" ry="2" />
+<text  x="1181.37" y="367.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1624 (1 samples, 0.04%)</title><rect x="383.1" y="69" width="0.4" height="15.0" fill="rgb(248,74,15)" rx="2" ry="2" />
+<text  x="386.09" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:527 (76 samples, 2.77%)</title><rect x="1106.9" y="149" width="32.7" height="15.0" fill="rgb(245,57,4)" rx="2" ry="2" />
+<text  x="1109.85" y="159.5" >ja..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1187 (4 samples, 0.15%)</title><rect x="656.7" y="85" width="1.7" height="15.0" fill="rgb(239,72,43)" rx="2" ry="2" />
+<text  x="659.65" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:406 (1 samples, 0.04%)</title><rect x="433.9" y="53" width="0.5" height="15.0" fill="rgb(224,167,52)" rx="2" ry="2" />
+<text  x="436.92" y="63.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:475 (2,707 samples, 98.83%)</title><rect x="10.0" y="357" width="1166.2" height="15.0" fill="rgb(224,45,35)" rx="2" ry="2" />
+<text  x="13.00" y="367.5" >org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:475</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1531 (2 samples, 0.07%)</title><rect x="246.9" y="69" width="0.9" height="15.0" fill="rgb(229,4,50)" rx="2" ry="2" />
+<text  x="249.95" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3895 (4 samples, 0.15%)</title><rect x="466.2" y="85" width="1.8" height="15.0" fill="rgb(246,80,44)" rx="2" ry="2" />
+<text  x="469.23" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toString:4099 (1,134 samples, 41.40%)</title><rect x="43.2" y="165" width="488.5" height="15.0" fill="rgb(247,150,45)" rx="2" ry="2" />
+<text  x="46.17" y="175.5" >java.math.BigInteger.toString:4099</text>
+</g>
+<g >
+<title>java.io.FilterInputStream.read:95 (4 samples, 0.15%)</title><rect x="1188.3" y="453" width="1.7" height="15.0" fill="rgb(211,174,2)" rx="2" ry="2" />
+<text  x="1191.28" y="463.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:122 (6 samples, 0.22%)</title><rect x="68.6" y="117" width="2.6" height="15.0" fill="rgb(217,7,0)" rx="2" ry="2" />
+<text  x="71.59" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.toBigInteger:189 (3 samples, 0.11%)</title><rect x="978.0" y="117" width="1.3" height="15.0" fill="rgb(205,18,46)" rx="2" ry="2" />
+<text  x="981.04" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:123 (2 samples, 0.07%)</title><rect x="71.2" y="117" width="0.8" height="15.0" fill="rgb(252,220,25)" rx="2" ry="2" />
+<text  x="74.18" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1635 (2 samples, 0.07%)</title><rect x="906.1" y="69" width="0.9" height="15.0" fill="rgb(229,75,38)" rx="2" ry="2" />
+<text  x="909.09" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1547 (16 samples, 0.58%)</title><rect x="776.8" y="69" width="6.9" height="15.0" fill="rgb(248,85,31)" rx="2" ry="2" />
+<text  x="779.85" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.clear:248 (1 samples, 0.04%)</title><rect x="685.1" y="69" width="0.4" height="15.0" fill="rgb(233,223,48)" rx="2" ry="2" />
+<text  x="688.09" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3894 (4 samples, 0.15%)</title><rect x="966.4" y="85" width="1.7" height="15.0" fill="rgb(219,181,25)" rx="2" ry="2" />
+<text  x="969.41" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1579 (13 samples, 0.47%)</title><rect x="330.5" y="69" width="5.6" height="15.0" fill="rgb(236,76,54)" rx="2" ry="2" />
+<text  x="333.53" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.CharacterDataLatin1.toUpperCaseEx:249 (6 samples, 0.22%)</title><rect x="1062.0" y="133" width="2.6" height="15.0" fill="rgb(242,151,10)" rx="2" ry="2" />
+<text  x="1065.05" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1562 (4 samples, 0.15%)</title><rect x="321.0" y="69" width="1.8" height="15.0" fill="rgb(252,57,48)" rx="2" ry="2" />
+<text  x="324.05" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1511 (11 samples, 0.40%)</title><rect x="759.6" y="69" width="4.8" height="15.0" fill="rgb(213,192,30)" rx="2" ry="2" />
+<text  x="762.62" y="79.5" ></text>
+</g>
+<g >
+<title>org.sample.jmh_generated.BenchmarkPublicKeys_sm2p256v1_uncompressed_jmhTest.sm2p256v1_uncompressed_thrpt_jmhStub:119 (2,703 samples, 98.69%)</title><rect x="10.0" y="229" width="1164.5" height="15.0" fill="rgb(226,210,34)" rx="2" ry="2" />
+<text  x="13.00" y="239.5" >org.sample.jmh_generated.BenchmarkPublicKeys_sm2p256v1_uncompressed_jmhTest.sm2p256v1_uncompressed_thrpt_jmhStub:119</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1468 (3 samples, 0.11%)</title><rect x="211.2" y="53" width="1.3" height="15.0" fill="rgb(215,69,35)" rx="2" ry="2" />
+<text  x="214.19" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1532 (1 samples, 0.04%)</title><rect x="772.5" y="69" width="0.5" height="15.0" fill="rgb(212,40,46)" rx="2" ry="2" />
+<text  x="775.54" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:531 (21 samples, 0.77%)</title><rect x="1164.2" y="149" width="9.0" height="15.0" fill="rgb(209,218,19)" rx="2" ry="2" />
+<text  x="1167.15" y="159.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1494 (14 samples, 0.51%)</title><rect x="200.0" y="69" width="6.0" height="15.0" fill="rgb(212,204,17)" rx="2" ry="2" />
+<text  x="202.99" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:161 (2 samples, 0.07%)</title><rect x="517.1" y="117" width="0.8" height="15.0" fill="rgb(226,172,46)" rx="2" ry="2" />
+<text  x="520.07" y="127.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.inflateIfNeededFor:1732 (1 samples, 0.04%)</title><rect x="482.6" y="69" width="0.4" height="15.0" fill="rgb(236,123,16)" rx="2" ry="2" />
+<text  x="485.60" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:157 (55 samples, 2.01%)</title><rect x="488.6" y="117" width="23.7" height="15.0" fill="rgb(247,69,34)" rx="2" ry="2" />
+<text  x="491.63" y="127.5" >j..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1205 (8 samples, 0.29%)</title><rect x="683.4" y="85" width="3.4" height="15.0" fill="rgb(210,48,9)" rx="2" ry="2" />
+<text  x="686.36" y="95.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.ensureCapacityInternal:242 (6 samples, 0.22%)</title><rect x="524.8" y="85" width="2.6" height="15.0" fill="rgb(246,130,52)" rx="2" ry="2" />
+<text  x="527.82" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.compare:265 (8 samples, 0.29%)</title><rect x="126.8" y="69" width="3.4" height="15.0" fill="rgb(224,2,42)" rx="2" ry="2" />
+<text  x="129.75" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOf:3538 (3 samples, 0.11%)</title><rect x="1040.1" y="69" width="1.3" height="15.0" fill="rgb(216,215,53)" rx="2" ry="2" />
+<text  x="1043.08" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:511 (9 samples, 0.33%)</title><rect x="1060.8" y="149" width="3.8" height="15.0" fill="rgb(210,8,36)" rx="2" ry="2" />
+<text  x="1063.76" y="159.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:587 (11 samples, 0.40%)</title><rect x="1042.7" y="101" width="4.7" height="15.0" fill="rgb(231,167,29)" rx="2" ry="2" />
+<text  x="1045.66" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1532 (5 samples, 0.18%)</title><rect x="247.8" y="69" width="2.2" height="15.0" fill="rgb(253,76,22)" rx="2" ry="2" />
+<text  x="250.81" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:68 (2 samples, 0.07%)</title><rect x="67.3" y="117" width="0.9" height="15.0" fill="rgb(239,166,28)" rx="2" ry="2" />
+<text  x="70.30" y="127.5" ></text>
+</g>
+<g >
+<title>java.util.Objects.checkIndex:385 (2 samples, 0.07%)</title><rect x="1176.6" y="373" width="0.9" height="15.0" fill="rgb(220,151,50)" rx="2" ry="2" />
+<text  x="1179.64" y="383.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:442 (19 samples, 0.69%)</title><rect x="1176.2" y="437" width="8.2" height="15.0" fill="rgb(227,64,9)" rx="2" ry="2" />
+<text  x="1179.21" y="447.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.ensureCapacityInternal:242 (3 samples, 0.11%)</title><rect x="480.0" y="85" width="1.3" height="15.0" fill="rgb(208,222,51)" rx="2" ry="2" />
+<text  x="483.02" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:121 (1 samples, 0.04%)</title><rect x="91.4" y="117" width="0.5" height="15.0" fill="rgb(246,137,38)" rx="2" ry="2" />
+<text  x="94.42" y="127.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:523 (2 samples, 0.07%)</title><rect x="1070.2" y="149" width="0.9" height="15.0" fill="rgb(250,83,39)" rx="2" ry="2" />
+<text  x="1073.23" y="159.5" ></text>
+</g>
+<g >
+<title>java.security.spec.ECPoint.getAffineY:86 (7 samples, 0.26%)</title><rect x="536.0" y="181" width="3.0" height="15.0" fill="rgb(217,122,48)" rx="2" ry="2" />
+<text  x="539.02" y="191.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.primitiveLeftShift:701 (12 samples, 0.44%)</title><rect x="404.6" y="37" width="5.2" height="15.0" fill="rgb(253,7,28)" rx="2" ry="2" />
+<text  x="407.63" y="47.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:533 (3 samples, 0.11%)</title><rect x="1173.2" y="149" width="1.3" height="15.0" fill="rgb(242,48,20)" rx="2" ry="2" />
+<text  x="1176.20" y="159.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:547 (1 samples, 0.04%)</title><rect x="914.3" y="53" width="0.4" height="15.0" fill="rgb(221,165,43)" rx="2" ry="2" />
+<text  x="917.28" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.signInt:4733 (2 samples, 0.07%)</title><rect x="988.4" y="85" width="0.8" height="15.0" fill="rgb(234,4,14)" rx="2" ry="2" />
+<text  x="991.38" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1493 (62 samples, 2.26%)</title><rect x="173.3" y="69" width="26.7" height="15.0" fill="rgb(207,84,38)" rx="2" ry="2" />
+<text  x="176.28" y="79.5" >j..</text>
+</g>
+<g >
+<title>java.math.BigInteger.getInt:4746 (3 samples, 0.11%)</title><rect x="987.9" y="101" width="1.3" height="15.0" fill="rgb(228,72,32)" rx="2" ry="2" />
+<text  x="990.95" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:162 (7 samples, 0.26%)</title><rect x="446.4" y="101" width="3.0" height="15.0" fill="rgb(214,2,11)" rx="2" ry="2" />
+<text  x="449.41" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1654 (12 samples, 0.44%)</title><rect x="907.4" y="69" width="5.2" height="15.0" fill="rgb(239,161,41)" rx="2" ry="2" />
+<text  x="910.39" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1470 (11 samples, 0.40%)</title><rect x="742.8" y="53" width="4.8" height="15.0" fill="rgb(222,47,26)" rx="2" ry="2" />
+<text  x="745.81" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:587 (11 samples, 0.40%)</title><rect x="481.3" y="101" width="4.7" height="15.0" fill="rgb(251,62,9)" rx="2" ry="2" />
+<text  x="484.31" y="111.5" ></text>
+</g>
+<g >
+<title>java.io.BufferedInputStream.read:361 (4 samples, 0.15%)</title><rect x="1188.3" y="437" width="1.7" height="15.0" fill="rgb(218,31,53)" rx="2" ry="2" />
+<text  x="1191.28" y="447.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.clear:249 (3 samples, 0.11%)</title><rect x="685.5" y="69" width="1.3" height="15.0" fill="rgb(250,108,29)" rx="2" ry="2" />
+<text  x="688.52" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divide:1158 (688 samples, 25.12%)</title><rect x="651.5" y="101" width="296.4" height="15.0" fill="rgb(229,219,31)" rx="2" ry="2" />
+<text  x="654.48" y="111.5" >java.math.MutableBigInteger.divide:1158</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:139 (5 samples, 0.18%)</title><rect x="663.1" y="69" width="2.2" height="15.0" fill="rgb(244,67,2)" rx="2" ry="2" />
+<text  x="666.11" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1612 (1 samples, 0.04%)</title><rect x="368.0" y="69" width="0.4" height="15.0" fill="rgb(223,160,50)" rx="2" ry="2" />
+<text  x="371.01" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:157 (35 samples, 1.28%)</title><rect x="1009.5" y="117" width="15.1" height="15.0" fill="rgb(251,223,10)" rx="2" ry="2" />
+<text  x="1012.49" y="127.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.profile.JavaFlightRecorderProfiler.beforeIteration:131 (1 samples, 0.04%)</title><rect x="1184.4" y="341" width="0.4" height="15.0" fill="rgb(254,56,24)" rx="2" ry="2" />
+<text  x="1187.40" y="351.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.putStringAt:1749 (4 samples, 0.15%)</title><rect x="1003.9" y="85" width="1.7" height="15.0" fill="rgb(211,92,6)" rx="2" ry="2" />
+<text  x="1006.89" y="95.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.newString:763 (11 samples, 0.40%)</title><rect x="1033.6" y="101" width="4.8" height="15.0" fill="rgb(207,117,28)" rx="2" ry="2" />
+<text  x="1036.61" y="111.5" ></text>
+</g>
+<g >
+<title>java.lang.String.&lt;init&gt;:4534 (13 samples, 0.47%)</title><rect x="1049.6" y="117" width="5.6" height="15.0" fill="rgb(251,91,31)" rx="2" ry="2" />
+<text  x="1052.55" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1527 (4 samples, 0.15%)</title><rect x="240.9" y="69" width="1.7" height="15.0" fill="rgb(231,4,8)" rx="2" ry="2" />
+<text  x="243.92" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:396 (2 samples, 0.07%)</title><rect x="944.9" y="53" width="0.8" height="15.0" fill="rgb(218,78,42)" rx="2" ry="2" />
+<text  x="947.87" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1554 (5 samples, 0.18%)</title><rect x="268.1" y="69" width="2.1" height="15.0" fill="rgb(218,164,38)" rx="2" ry="2" />
+<text  x="271.06" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1538 (8 samples, 0.29%)</title><rect x="251.7" y="69" width="3.4" height="15.0" fill="rgb(234,62,7)" rx="2" ry="2" />
+<text  x="254.69" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getLowestSetBit:364 (3 samples, 0.11%)</title><rect x="698.9" y="69" width="1.3" height="15.0" fill="rgb(237,139,7)" rx="2" ry="2" />
+<text  x="701.87" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:552 (25 samples, 0.91%)</title><rect x="403.3" y="53" width="10.8" height="15.0" fill="rgb(253,205,48)" rx="2" ry="2" />
+<text  x="406.33" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:122 (9 samples, 0.33%)</title><rect x="597.6" y="117" width="3.9" height="15.0" fill="rgb(208,229,44)" rx="2" ry="2" />
+<text  x="600.63" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1557 (8 samples, 0.29%)</title><rect x="844.1" y="69" width="3.4" height="15.0" fill="rgb(215,213,10)" rx="2" ry="2" />
+<text  x="847.06" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.CharacterDataLatin1.toUpperCaseEx:250 (25 samples, 0.91%)</title><rect x="1118.5" y="133" width="10.8" height="15.0" fill="rgb(239,20,24)" rx="2" ry="2" />
+<text  x="1121.48" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4151 (801 samples, 29.24%)</title><rect x="91.9" y="133" width="345.0" height="15.0" fill="rgb(218,211,33)" rx="2" ry="2" />
+<text  x="94.85" y="143.5" >java.math.BigInteger.smallToString:4151</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1492 (6 samples, 0.22%)</title><rect x="170.7" y="69" width="2.6" height="15.0" fill="rgb(222,1,43)" rx="2" ry="2" />
+<text  x="173.69" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1622 (1 samples, 0.04%)</title><rect x="891.4" y="69" width="0.5" height="15.0" fill="rgb(213,61,42)" rx="2" ry="2" />
+<text  x="894.45" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divide:1156 (61 samples, 2.23%)</title><rect x="91.9" y="101" width="26.2" height="15.0" fill="rgb(222,116,12)" rx="2" ry="2" />
+<text  x="94.85" y="111.5" >j..</text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.newCapacity:262 (1 samples, 0.04%)</title><rect x="480.9" y="69" width="0.4" height="15.0" fill="rgb(236,150,40)" rx="2" ry="2" />
+<text  x="483.88" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:402 (2 samples, 0.07%)</title><rect x="434.8" y="53" width="0.8" height="15.0" fill="rgb(217,7,34)" rx="2" ry="2" />
+<text  x="437.78" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1471 (14 samples, 0.51%)</title><rect x="747.6" y="53" width="6.0" height="15.0" fill="rgb(215,93,12)" rx="2" ry="2" />
+<text  x="750.55" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.invoke.LambdaForm$MH+0x0000000800115c00.845957572.invoke:-1 (2,707 samples, 98.83%)</title><rect x="10.0" y="277" width="1166.2" height="15.0" fill="rgb(225,204,44)" rx="2" ry="2" />
+<text  x="13.00" y="287.5" >java.lang.invoke.LambdaForm$MH+0x0000000800115c00.845957572.invoke:-1</text>
+</g>
+<g >
+<title>java.lang.reflect.Method.invoke:578 (2,707 samples, 98.83%)</title><rect x="10.0" y="341" width="1166.2" height="15.0" fill="rgb(237,197,17)" rx="2" ry="2" />
+<text  x="13.00" y="351.5" >java.lang.reflect.Method.invoke:578</text>
+</g>
+<g >
+<title>java.math.BigInteger.toString:4092 (68 samples, 2.48%)</title><rect x="13.9" y="165" width="29.3" height="15.0" fill="rgb(234,66,22)" rx="2" ry="2" />
+<text  x="16.88" y="175.5" >ja..</text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4150 (46 samples, 1.68%)</title><rect x="72.0" y="133" width="19.9" height="15.0" fill="rgb(251,184,52)" rx="2" ry="2" />
+<text  x="75.04" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.&lt;init&gt;:100 (59 samples, 2.15%)</title><rect x="15.6" y="133" width="25.4" height="15.0" fill="rgb(211,66,34)" rx="2" ry="2" />
+<text  x="18.60" y="143.5" >j..</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1562 (7 samples, 0.26%)</title><rect x="847.5" y="69" width="3.0" height="15.0" fill="rgb(208,58,5)" rx="2" ry="2" />
+<text  x="850.50" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.toUpperCase:528 (57 samples, 2.08%)</title><rect x="1139.6" y="149" width="24.6" height="15.0" fill="rgb(230,43,27)" rx="2" ry="2" />
+<text  x="1142.59" y="159.5" >j..</text>
+</g>
+<g >
+<title>java.util.Arrays.fill:3181 (1 samples, 0.04%)</title><rect x="983.6" y="85" width="0.5" height="15.0" fill="rgb(208,106,18)" rx="2" ry="2" />
+<text  x="986.64" y="95.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.newCapacity:263 (1 samples, 0.04%)</title><rect x="1041.8" y="69" width="0.4" height="15.0" fill="rgb(249,0,15)" rx="2" ry="2" />
+<text  x="1044.80" y="79.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.ForkedRunner.run:72 (5 samples, 0.18%)</title><rect x="1184.4" y="453" width="2.2" height="15.0" fill="rgb(231,9,16)" rx="2" ry="2" />
+<text  x="1187.40" y="463.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.isToDisk:513 (3 samples, 0.11%)</title><rect x="1176.2" y="405" width="1.3" height="15.0" fill="rgb(226,31,19)" rx="2" ry="2" />
+<text  x="1179.21" y="415.5" ></text>
+</g>
+<g >
+<title>java.lang.Object.&lt;init&gt;:45 (2 samples, 0.07%)</title><rect x="567.9" y="117" width="0.9" height="15.0" fill="rgb(215,169,29)" rx="2" ry="2" />
+<text  x="570.90" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:553 (2 samples, 0.07%)</title><rect x="414.1" y="53" width="0.9" height="15.0" fill="rgb(210,58,39)" rx="2" ry="2" />
+<text  x="417.10" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.String.&lt;init&gt;:1487 (13 samples, 0.47%)</title><rect x="1049.6" y="133" width="5.6" height="15.0" fill="rgb(253,134,40)" rx="2" ry="2" />
+<text  x="1052.55" y="143.5" ></text>
+</g>
+<g >
+<title>org.sample.SM2Util.getHexPublicKeyUncompressed:53 (4 samples, 0.15%)</title><rect x="10.0" y="197" width="1.7" height="15.0" fill="rgb(216,207,11)" rx="2" ry="2" />
+<text  x="13.00" y="207.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.fill:3182 (1 samples, 0.04%)</title><rect x="977.2" y="85" width="0.4" height="15.0" fill="rgb(215,76,11)" rx="2" ry="2" />
+<text  x="980.18" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1577 (1 samples, 0.04%)</title><rect x="852.2" y="69" width="0.5" height="15.0" fill="rgb(231,14,11)" rx="2" ry="2" />
+<text  x="855.24" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.primitiveLeftShift:703 (4 samples, 0.15%)</title><rect x="412.4" y="37" width="1.7" height="15.0" fill="rgb(210,157,22)" rx="2" ry="2" />
+<text  x="415.38" y="47.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:458 (2,707 samples, 98.83%)</title><rect x="10.0" y="373" width="1166.2" height="15.0" fill="rgb(220,72,10)" rx="2" ry="2" />
+<text  x="13.00" y="383.5" >org.openjdk.jmh.runner.BenchmarkHandler$BenchmarkTask.call:458</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1634 (5 samples, 0.18%)</title><rect x="383.5" y="69" width="2.2" height="15.0" fill="rgb(206,59,35)" rx="2" ry="2" />
+<text  x="386.52" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.putStringAt:1749 (3 samples, 0.11%)</title><rect x="481.7" y="85" width="1.3" height="15.0" fill="rgb(249,58,38)" rx="2" ry="2" />
+<text  x="484.74" y="95.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3894 (2 samples, 0.07%)</title><rect x="146.6" y="53" width="0.8" height="15.0" fill="rgb(206,140,26)" rx="2" ry="2" />
+<text  x="149.57" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:551 (1 samples, 0.04%)</title><rect x="916.9" y="53" width="0.4" height="15.0" fill="rgb(217,116,5)" rx="2" ry="2" />
+<text  x="919.86" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.longValue:4349 (11 samples, 0.40%)</title><rect x="985.4" y="117" width="4.7" height="15.0" fill="rgb(216,30,6)" rx="2" ry="2" />
+<text  x="988.36" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1528 (9 samples, 0.33%)</title><rect x="768.2" y="69" width="3.9" height="15.0" fill="rgb(208,32,39)" rx="2" ry="2" />
+<text  x="771.23" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:647 (3 samples, 0.11%)</title><rect x="907.4" y="53" width="1.3" height="15.0" fill="rgb(228,82,7)" rx="2" ry="2" />
+<text  x="910.39" y="63.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.util.Utils.tryWith:507 (4 samples, 0.15%)</title><rect x="1184.8" y="309" width="1.8" height="15.0" fill="rgb(240,221,46)" rx="2" ry="2" />
+<text  x="1187.83" y="319.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4155 (7 samples, 0.26%)</title><rect x="468.8" y="133" width="3.0" height="15.0" fill="rgb(219,7,19)" rx="2" ry="2" />
+<text  x="471.82" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.Number.&lt;init&gt;:59 (1 samples, 0.04%)</title><rect x="956.5" y="85" width="0.4" height="15.0" fill="rgb(231,152,4)" rx="2" ry="2" />
+<text  x="959.50" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1536 (1 samples, 0.04%)</title><rect x="773.0" y="69" width="0.4" height="15.0" fill="rgb(215,132,26)" rx="2" ry="2" />
+<text  x="775.97" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:649 (11 samples, 0.40%)</title><rect x="879.0" y="53" width="4.7" height="15.0" fill="rgb(207,218,10)" rx="2" ry="2" />
+<text  x="881.95" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.newCapacity:260 (2 samples, 0.07%)</title><rect x="525.3" y="69" width="0.8" height="15.0" fill="rgb(251,71,33)" rx="2" ry="2" />
+<text  x="528.25" y="79.5" ></text>
+</g>
+<g >
+<title>org.sample.SM2Util.getHexPublicKeyUncompressed:57 (277 samples, 10.11%)</title><rect x="1055.2" y="197" width="119.3" height="15.0" fill="rgb(210,66,44)" rx="2" ry="2" />
+<text  x="1058.16" y="207.5" >org.sample.SM2..</text>
+</g>
+<g >
+<title>jdk.internal.util.ArraysSupport.newLength:637 (1 samples, 0.04%)</title><rect x="1041.4" y="53" width="0.4" height="15.0" fill="rgb(238,213,50)" rx="2" ry="2" />
+<text  x="1044.37" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:391 (2 samples, 0.07%)</title><rect x="944.0" y="53" width="0.9" height="15.0" fill="rgb(231,39,48)" rx="2" ry="2" />
+<text  x="947.01" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1579 (11 samples, 0.40%)</title><rect x="859.6" y="69" width="4.7" height="15.0" fill="rgb(228,64,24)" rx="2" ry="2" />
+<text  x="862.57" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1205 (3 samples, 0.11%)</title><rect x="150.0" y="85" width="1.3" height="15.0" fill="rgb(214,203,38)" rx="2" ry="2" />
+<text  x="153.01" y="95.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.consumer.EventLog.update:86 (1 samples, 0.04%)</title><rect x="1177.5" y="405" width="0.4" height="15.0" fill="rgb(233,196,28)" rx="2" ry="2" />
+<text  x="1180.51" y="415.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1471 (3 samples, 0.11%)</title><rect x="727.3" y="53" width="1.3" height="15.0" fill="rgb(218,165,23)" rx="2" ry="2" />
+<text  x="730.31" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.String.length:1499 (1 samples, 0.04%)</title><rect x="521.8" y="85" width="0.4" height="15.0" fill="rgb(217,94,9)" rx="2" ry="2" />
+<text  x="524.81" y="95.5" ></text>
+</g>
+<g >
+<title>org.sample.jmh_generated.BenchmarkPublicKeys_sm2p256v1_uncompressed_jmhTest.sm2p256v1_uncompressed_Throughput:83 (2,707 samples, 98.83%)</title><rect x="10.0" y="245" width="1166.2" height="15.0" fill="rgb(224,220,8)" rx="2" ry="2" />
+<text  x="13.00" y="255.5" >org.sample.jmh_generated.BenchmarkPublicKeys_sm2p256v1_uncompressed_jmhTest.sm2p256v1_uncompressed_Throughput:83</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1499 (29 samples, 1.06%)</title><rect x="209.9" y="69" width="12.5" height="15.0" fill="rgb(207,193,26)" rx="2" ry="2" />
+<text  x="212.90" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:552 (17 samples, 0.62%)</title><rect x="917.3" y="53" width="7.3" height="15.0" fill="rgb(221,10,30)" rx="2" ry="2" />
+<text  x="920.29" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.String.getBytes:4471 (4 samples, 0.15%)</title><rect x="529.6" y="69" width="1.7" height="15.0" fill="rgb(253,108,10)" rx="2" ry="2" />
+<text  x="532.56" y="79.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.ThreadPoolExecutor$Worker.run:642 (2,707 samples, 98.83%)</title><rect x="10.0" y="453" width="1166.2" height="15.0" fill="rgb(215,181,50)" rx="2" ry="2" />
+<text  x="13.00" y="463.5" >java.util.concurrent.ThreadPoolExecutor$Worker.run:642</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1468 (36 samples, 1.31%)</title><rect x="706.2" y="53" width="15.5" height="15.0" fill="rgb(223,7,51)" rx="2" ry="2" />
+<text  x="709.20" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:397 (1 samples, 0.04%)</title><rect x="434.4" y="53" width="0.4" height="15.0" fill="rgb(215,13,23)" rx="2" ry="2" />
+<text  x="437.35" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.invoke.LambdaForm$DMH+0x0000000800001800.932583850.invokeSpecial:-1 (2,707 samples, 98.83%)</title><rect x="10.0" y="261" width="1166.2" height="15.0" fill="rgb(227,199,46)" rx="2" ry="2" />
+<text  x="13.00" y="271.5" >java.lang.invoke.LambdaForm$DMH+0x0000000800001800.932583850.invokeSpecial:-1</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:164 (5 samples, 0.18%)</title><rect x="981.5" y="101" width="2.1" height="15.0" fill="rgb(239,51,19)" rx="2" ry="2" />
+<text  x="984.49" y="111.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3895 (2 samples, 0.07%)</title><rect x="147.4" y="53" width="0.9" height="15.0" fill="rgb(254,201,5)" rx="2" ry="2" />
+<text  x="150.43" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1667 (1 samples, 0.04%)</title><rect x="400.3" y="69" width="0.4" height="15.0" fill="rgb(228,204,29)" rx="2" ry="2" />
+<text  x="403.32" y="79.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.profile.JavaFlightRecorderProfiler.execute:191 (4 samples, 0.15%)</title><rect x="1184.8" y="325" width="1.8" height="15.0" fill="rgb(227,6,14)" rx="2" ry="2" />
+<text  x="1187.83" y="335.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1605 (3 samples, 0.11%)</title><rect x="366.7" y="69" width="1.3" height="15.0" fill="rgb(226,215,6)" rx="2" ry="2" />
+<text  x="369.71" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.CharacterDataLatin1.getProperties:74 (16 samples, 0.58%)</title><rect x="1106.9" y="117" width="6.8" height="15.0" fill="rgb(252,136,31)" rx="2" ry="2" />
+<text  x="1109.85" y="127.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:164 (6 samples, 0.22%)</title><rect x="517.9" y="117" width="2.6" height="15.0" fill="rgb(210,206,6)" rx="2" ry="2" />
+<text  x="520.93" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1140 (5 samples, 0.18%)</title><rect x="444.3" y="101" width="2.1" height="15.0" fill="rgb(215,188,5)" rx="2" ry="2" />
+<text  x="447.26" y="111.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.RequestEngine.doPeriodic:189 (14 samples, 0.51%)</title><rect x="1177.9" y="405" width="6.1" height="15.0" fill="rgb(227,108,16)" rx="2" ry="2" />
+<text  x="1180.94" y="415.5" ></text>
+</g>
+<g >
+<title>java.lang.CharacterDataLatin1.toUpperCaseEx:247 (1 samples, 0.04%)</title><rect x="1061.6" y="133" width="0.4" height="15.0" fill="rgb(218,84,7)" rx="2" ry="2" />
+<text  x="1064.62" y="143.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.ThreadPoolExecutor.runWorker:1144 (2,707 samples, 98.83%)</title><rect x="10.0" y="437" width="1166.2" height="15.0" fill="rgb(239,35,41)" rx="2" ry="2" />
+<text  x="13.00" y="447.5" >java.util.concurrent.ThreadPoolExecutor.runWorker:1144</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1557 (3 samples, 0.11%)</title><rect x="319.8" y="69" width="1.2" height="15.0" fill="rgb(241,93,4)" rx="2" ry="2" />
+<text  x="322.76" y="79.5" ></text>
+</g>
+<g >
+<title>java.io.FileInputStream.readBytes:-1 (4 samples, 0.15%)</title><rect x="1186.6" y="437" width="1.7" height="15.0" fill="rgb(245,156,2)" rx="2" ry="2" />
+<text  x="1189.55" y="447.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1511 (10 samples, 0.37%)</title><rect x="229.3" y="69" width="4.3" height="15.0" fill="rgb(229,94,48)" rx="2" ry="2" />
+<text  x="232.28" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4167 (29 samples, 1.06%)</title><rect x="473.6" y="133" width="12.4" height="15.0" fill="rgb(206,11,23)" rx="2" ry="2" />
+<text  x="476.56" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1140 (6 samples, 0.22%)</title><rect x="463.6" y="101" width="2.6" height="15.0" fill="rgb(215,139,18)" rx="2" ry="2" />
+<text  x="466.65" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1595 (55 samples, 2.01%)</title><rect x="343.0" y="69" width="23.7" height="15.0" fill="rgb(230,85,28)" rx="2" ry="2" />
+<text  x="346.02" y="79.5" >j..</text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:586 (13 samples, 0.47%)</title><rect x="475.7" y="101" width="5.6" height="15.0" fill="rgb(216,95,5)" rx="2" ry="2" />
+<text  x="478.71" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:102 (2 samples, 0.07%)</title><rect x="59.5" y="117" width="0.9" height="15.0" fill="rgb(244,127,41)" rx="2" ry="2" />
+<text  x="62.54" y="127.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.ensureCapacityInternal:241 (5 samples, 0.18%)</title><rect x="998.7" y="85" width="2.2" height="15.0" fill="rgb(210,179,0)" rx="2" ry="2" />
+<text  x="1001.72" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divide:1156 (44 samples, 1.61%)</title><rect x="632.5" y="101" width="19.0" height="15.0" fill="rgb(207,118,1)" rx="2" ry="2" />
+<text  x="635.53" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getMagnitudeArray:164 (11 samples, 0.40%)</title><rect x="449.4" y="101" width="4.8" height="15.0" fill="rgb(253,191,32)" rx="2" ry="2" />
+<text  x="452.43" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1491 (3 samples, 0.11%)</title><rect x="701.5" y="69" width="1.2" height="15.0" fill="rgb(235,2,41)" rx="2" ry="2" />
+<text  x="704.46" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:585 (5 samples, 0.18%)</title><rect x="473.6" y="101" width="2.1" height="15.0" fill="rgb(246,227,39)" rx="2" ry="2" />
+<text  x="476.56" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1139 (2 samples, 0.07%)</title><rect x="462.8" y="101" width="0.8" height="15.0" fill="rgb(230,132,38)" rx="2" ry="2" />
+<text  x="465.79" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1555 (115 samples, 4.20%)</title><rect x="270.2" y="69" width="49.6" height="15.0" fill="rgb(209,0,40)" rx="2" ry="2" />
+<text  x="273.21" y="79.5" >java..</text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4177 (21 samples, 0.77%)</title><rect x="1038.4" y="133" width="9.0" height="15.0" fill="rgb(242,103,46)" rx="2" ry="2" />
+<text  x="1041.35" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.padWithZeros:4112 (1 samples, 0.04%)</title><rect x="473.1" y="117" width="0.5" height="15.0" fill="rgb(231,133,15)" rx="2" ry="2" />
+<text  x="476.13" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4149 (9 samples, 0.33%)</title><rect x="68.2" y="133" width="3.8" height="15.0" fill="rgb(210,75,3)" rx="2" ry="2" />
+<text  x="71.16" y="143.5" ></text>
+</g>
+<g >
+<title>java.lang.ProcessImpl.waitForInterruptibly:-1 (1 samples, 0.04%)</title><rect x="1184.4" y="277" width="0.4" height="15.0" fill="rgb(239,170,7)" rx="2" ry="2" />
+<text  x="1187.40" y="287.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1503 (1 samples, 0.04%)</title><rect x="223.7" y="69" width="0.4" height="15.0" fill="rgb(219,47,34)" rx="2" ry="2" />
+<text  x="226.68" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.append:587 (10 samples, 0.37%)</title><rect x="527.4" y="101" width="4.3" height="15.0" fill="rgb(218,45,35)" rx="2" ry="2" />
+<text  x="530.41" y="111.5" ></text>
+</g>
+<g >
+<title>java.lang.String.getBytes:4472 (1 samples, 0.04%)</title><rect x="1007.8" y="69" width="0.4" height="15.0" fill="rgb(237,166,20)" rx="2" ry="2" />
+<text  x="1010.77" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.String.coder:4559 (2 samples, 0.07%)</title><rect x="528.7" y="53" width="0.9" height="15.0" fill="rgb(247,66,26)" rx="2" ry="2" />
+<text  x="531.70" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:546 (1 samples, 0.04%)</title><rect x="401.6" y="53" width="0.4" height="15.0" fill="rgb(254,160,28)" rx="2" ry="2" />
+<text  x="404.61" y="63.5" ></text>
+</g>
+<g >
+<title>java.lang.StringBuilder.&lt;init&gt;:119 (64 samples, 2.34%)</title><rect x="15.6" y="149" width="27.6" height="15.0" fill="rgb(236,90,27)" rx="2" ry="2" />
+<text  x="18.60" y="159.5" >j..</text>
+</g>
+<g >
+<title>java.lang.CharacterDataLatin1.toUpperCaseEx:252 (24 samples, 0.88%)</title><rect x="1129.3" y="133" width="10.3" height="15.0" fill="rgb(223,101,14)" rx="2" ry="2" />
+<text  x="1132.26" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getLowestSetBit:359 (17 samples, 0.62%)</title><rect x="689.0" y="69" width="7.3" height="15.0" fill="rgb(247,11,18)" rx="2" ry="2" />
+<text  x="691.96" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1497 (3 samples, 0.11%)</title><rect x="208.6" y="69" width="1.3" height="15.0" fill="rgb(235,189,2)" rx="2" ry="2" />
+<text  x="211.61" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.putStringAt:1750 (5 samples, 0.18%)</title><rect x="529.6" y="85" width="2.1" height="15.0" fill="rgb(240,79,10)" rx="2" ry="2" />
+<text  x="532.56" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.rightShift:546 (2 samples, 0.07%)</title><rect x="913.4" y="53" width="0.9" height="15.0" fill="rgb(241,199,31)" rx="2" ry="2" />
+<text  x="916.42" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toString:4101 (18 samples, 0.66%)</title><rect x="1047.4" y="165" width="7.8" height="15.0" fill="rgb(254,80,53)" rx="2" ry="2" />
+<text  x="1050.40" y="175.5" ></text>
+</g>
+<g >
+<title>org.sample.SM2Util.getHexPublicKeyUncompressed:55 (1,216 samples, 44.40%)</title><rect x="11.7" y="197" width="523.9" height="15.0" fill="rgb(218,53,20)" rx="2" ry="2" />
+<text  x="14.72" y="207.5" >org.sample.SM2Util.getHexPublicKeyUncompressed:55</text>
+</g>
+<g >
+<title>jdk.internal.reflect.DirectMethodHandleAccessor.invokeImpl:156 (2,707 samples, 98.83%)</title><rect x="10.0" y="309" width="1166.2" height="15.0" fill="rgb(248,181,42)" rx="2" ry="2" />
+<text  x="13.00" y="319.5" >jdk.internal.reflect.DirectMethodHandleAccessor.invokeImpl:156</text>
+</g>
+<g >
+<title>java.math.BigInteger.bitLength:3816 (2 samples, 0.07%)</title><rect x="539.0" y="149" width="0.9" height="15.0" fill="rgb(207,86,14)" rx="2" ry="2" />
+<text  x="542.04" y="159.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.newCapacity:262 (1 samples, 0.04%)</title><rect x="1003.5" y="69" width="0.4" height="15.0" fill="rgb(242,130,41)" rx="2" ry="2" />
+<text  x="1006.46" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1652 (2 samples, 0.07%)</title><rect x="387.0" y="69" width="0.8" height="15.0" fill="rgb(223,48,18)" rx="2" ry="2" />
+<text  x="389.96" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:647 (5 samples, 0.18%)</title><rect x="387.8" y="53" width="2.2" height="15.0" fill="rgb(223,214,14)" rx="2" ry="2" />
+<text  x="390.82" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divide:1152 (732 samples, 26.73%)</title><rect x="632.5" y="117" width="315.4" height="15.0" fill="rgb(229,117,34)" rx="2" ry="2" />
+<text  x="635.53" y="127.5" >java.math.MutableBigInteger.divide:1152</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideKnuth:1183 (9 samples, 0.33%)</title><rect x="652.8" y="85" width="3.9" height="15.0" fill="rgb(206,156,50)" rx="2" ry="2" />
+<text  x="655.77" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1140 (2 samples, 0.07%)</title><rect x="980.6" y="101" width="0.9" height="15.0" fill="rgb(249,62,24)" rx="2" ry="2" />
+<text  x="983.62" y="111.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toString:4101 (9 samples, 0.33%)</title><rect x="531.7" y="165" width="3.9" height="15.0" fill="rgb(242,19,27)" rx="2" ry="2" />
+<text  x="534.72" y="175.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.copyOfRange:3895 (7 samples, 0.26%)</title><rect x="451.2" y="85" width="3.0" height="15.0" fill="rgb(206,154,36)" rx="2" ry="2" />
+<text  x="454.15" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.copyAndShift:1467 (1 samples, 0.04%)</title><rect x="705.8" y="53" width="0.4" height="15.0" fill="rgb(207,185,29)" rx="2" ry="2" />
+<text  x="708.76" y="63.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.ForkedMain.main:86 (5 samples, 0.18%)</title><rect x="1184.4" y="469" width="2.2" height="15.0" fill="rgb(250,152,20)" rx="2" ry="2" />
+<text  x="1187.40" y="479.5" ></text>
+</g>
+<g >
+<title>java.lang.CharacterDataLatin1.getProperties:74 (1 samples, 0.04%)</title><rect x="1061.6" y="117" width="0.4" height="15.0" fill="rgb(236,223,31)" rx="2" ry="2" />
+<text  x="1064.62" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4148 (22 samples, 0.80%)</title><rect x="58.7" y="133" width="9.5" height="15.0" fill="rgb(225,217,40)" rx="2" ry="2" />
+<text  x="61.68" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.divideMagnitude:1537 (2 samples, 0.07%)</title><rect x="250.8" y="69" width="0.9" height="15.0" fill="rgb(250,128,52)" rx="2" ry="2" />
+<text  x="253.83" y="79.5" ></text>
+</g>
+<g >
+<title>java.lang.StringLatin1.canEncode:51 (57 samples, 2.08%)</title><rect x="1139.6" y="133" width="24.6" height="15.0" fill="rgb(221,131,43)" rx="2" ry="2" />
+<text  x="1142.59" y="143.5" >j..</text>
+</g>
+<g >
+<title>java.lang.StringLatin1.newString:760 (2 samples, 0.07%)</title><rect x="990.1" y="101" width="0.9" height="15.0" fill="rgb(221,100,14)" rx="2" ry="2" />
+<text  x="993.10" y="111.5" ></text>
+</g>
+<g >
+<title>java.lang.AbstractStringBuilder.newCapacity:263 (3 samples, 0.11%)</title><rect x="526.1" y="69" width="1.3" height="15.0" fill="rgb(211,218,31)" rx="2" ry="2" />
+<text  x="529.12" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.&lt;init&gt;:1138 (2 samples, 0.07%)</title><rect x="979.8" y="101" width="0.8" height="15.0" fill="rgb(215,121,21)" rx="2" ry="2" />
+<text  x="982.76" y="111.5" ></text>
+</g>
+<g >
+<title>java.util.concurrent.Executors$RunnableAdapter.call:577 (2,707 samples, 98.83%)</title><rect x="10.0" y="405" width="1166.2" height="15.0" fill="rgb(227,142,38)" rx="2" ry="2" />
+<text  x="13.00" y="415.5" >java.util.concurrent.Executors$RunnableAdapter.call:577</text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.normalize:402 (3 samples, 0.11%)</title><rect x="945.7" y="53" width="1.3" height="15.0" fill="rgb(205,117,36)" rx="2" ry="2" />
+<text  x="948.73" y="63.5" ></text>
+</g>
+<g >
+<title>org.openjdk.jmh.runner.BenchmarkHandler.runIteration:421 (4 samples, 0.15%)</title><rect x="1184.8" y="373" width="1.8" height="15.0" fill="rgb(236,135,15)" rx="2" ry="2" />
+<text  x="1187.83" y="383.5" ></text>
+</g>
+<g >
+<title>java.lang.Long.toString:157 (1 samples, 0.04%)</title><rect x="471.8" y="117" width="0.5" height="15.0" fill="rgb(248,205,45)" rx="2" ry="2" />
+<text  x="474.83" y="127.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:647 (8 samples, 0.29%)</title><rect x="343.0" y="53" width="3.5" height="15.0" fill="rgb(251,14,54)" rx="2" ry="2" />
+<text  x="346.02" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.getLowestSetBit:361 (6 samples, 0.22%)</title><rect x="696.3" y="69" width="2.6" height="15.0" fill="rgb(209,35,49)" rx="2" ry="2" />
+<text  x="699.29" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:648 (2 samples, 0.07%)</title><rect x="908.7" y="53" width="0.8" height="15.0" fill="rgb(235,154,18)" rx="2" ry="2" />
+<text  x="911.68" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.&lt;init&gt;:123 (1 samples, 0.04%)</title><rect x="208.2" y="53" width="0.4" height="15.0" fill="rgb(239,36,39)" rx="2" ry="2" />
+<text  x="211.17" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toString:4089 (1 samples, 0.04%)</title><rect x="13.4" y="165" width="0.5" height="15.0" fill="rgb(237,147,7)" rx="2" ry="2" />
+<text  x="16.45" y="175.5" ></text>
+</g>
+<g >
+<title>java.util.Arrays.fill:3181 (5 samples, 0.18%)</title><rect x="454.6" y="85" width="2.2" height="15.0" fill="rgb(210,69,7)" rx="2" ry="2" />
+<text  x="457.60" y="95.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.smallToString:4139 (20 samples, 0.73%)</title><rect x="45.8" y="133" width="8.6" height="15.0" fill="rgb(213,87,25)" rx="2" ry="2" />
+<text  x="48.76" y="143.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.longValue:4349 (7 samples, 0.26%)</title><rect x="468.8" y="117" width="3.0" height="15.0" fill="rgb(239,212,10)" rx="2" ry="2" />
+<text  x="471.82" y="127.5" ></text>
+</g>
+<g >
+<title>java.lang.String.getBytes:4471 (1 samples, 0.04%)</title><rect x="1047.0" y="69" width="0.4" height="15.0" fill="rgb(236,74,50)" rx="2" ry="2" />
+<text  x="1049.97" y="79.5" ></text>
+</g>
+<g >
+<title>java.math.MutableBigInteger.mulsub:649 (10 samples, 0.37%)</title><rect x="356.4" y="53" width="4.3" height="15.0" fill="rgb(214,162,49)" rx="2" ry="2" />
+<text  x="359.37" y="63.5" ></text>
+</g>
+<g >
+<title>java.math.BigInteger.toString:4089 (2 samples, 0.07%)</title><rect x="539.0" y="165" width="0.9" height="15.0" fill="rgb(224,21,34)" rx="2" ry="2" />
+<text  x="542.04" y="175.5" ></text>
+</g>
+</g>
+</svg>

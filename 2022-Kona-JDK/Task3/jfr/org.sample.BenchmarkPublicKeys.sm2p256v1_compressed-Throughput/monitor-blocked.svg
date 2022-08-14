@@ -1,6 +1,6 @@
 <?xml version="1.0" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg version="1.1" width="1200" height="198" onload="init(evt)" viewBox="0 0 1200 198" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<svg version="1.1" width="1200" height="182" onload="init(evt)" viewBox="0 0 1200 182" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
 <!-- NOTES:  -->
 <defs>
@@ -412,45 +412,61 @@
 	}
 ]]>
 </script>
-<rect x="0.0" y="0" width="1200.0" height="198.0" fill="url(#background)"  />
+<rect x="0.0" y="0" width="1200.0" height="182.0" fill="url(#background)"  />
 <text id="title" x="600.00" y="24" >monitor-blocked sm2p256v1_compressed-Throughput</text>
-<text id="details" x="10.00" y="181" > </text>
+<text id="details" x="10.00" y="165" > </text>
 <text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
 <text id="search" x="1090.00" y="24" >Search</text>
 <text id="ignorecase" x="1174.00" y="24" >ic</text>
-<text id="matched" x="1090.00" y="181" > </text>
+<text id="matched" x="1090.00" y="165" > </text>
 <g id="frames">
 <g >
-<title>jdk.jfr.internal.PlatformRecorder.takeNap:524 (49,138 samples, 100.00%)</title><rect x="10.0" y="69" width="1180.0" height="15.0" fill="rgb(213,165,53)" rx="2" ry="2" />
-<text  x="13.00" y="79.5" >jdk.jfr.internal.PlatformRecorder.takeNap:524</text>
+<title>java.lang.Object.wait:-1 (315 samples, 0.64%)</title><rect x="1182.4" y="53" width="7.6" height="15.0" fill="rgb(232,68,29)" rx="2" ry="2" />
+<text  x="1185.40" y="63.5" ></text>
 </g>
 <g >
-<title>java.lang.Object.wait:366 (49,138 samples, 100.00%)</title><rect x="10.0" y="53" width="1180.0" height="15.0" fill="rgb(234,225,1)" rx="2" ry="2" />
-<text  x="13.00" y="63.5" >java.lang.Object.wait:366</text>
+<title>jdk.internal.ref.CleanerImpl.run:140 (315 samples, 0.64%)</title><rect x="1182.4" y="85" width="7.6" height="15.0" fill="rgb(249,117,4)" rx="2" ry="2" />
+<text  x="1185.40" y="95.5" ></text>
 </g>
 <g >
-<title>all (49,138 samples, 100%)</title><rect x="10.0" y="149" width="1180.0" height="15.0" fill="rgb(235,12,23)" rx="2" ry="2" />
-<text  x="13.00" y="159.5" ></text>
+<title>jdk.jfr.internal.PlatformRecorder$$Lambda$84+0x0000000800c68408.766575284.run:-1 (48,562 samples, 99.36%)</title><rect x="10.0" y="101" width="1172.4" height="15.0" fill="rgb(226,142,30)" rx="2" ry="2" />
+<text  x="13.00" y="111.5" >jdk.jfr.internal.PlatformRecorder$$Lambda$84+0x0000000800c68408.766575284.run:-1</text>
 </g>
 <g >
-<title>jdk.jfr.internal.PlatformRecorder$$Lambda$112+0x000000080017a690.1519956952.run:-1 (49,138 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(231,71,54)" rx="2" ry="2" />
-<text  x="13.00" y="127.5" >jdk.jfr.internal.PlatformRecorder$$Lambda$112+0x000000080017a690.1519956952.run:-1</text>
+<title>jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:447 (48,562 samples, 99.36%)</title><rect x="10.0" y="85" width="1172.4" height="15.0" fill="rgb(240,153,48)" rx="2" ry="2" />
+<text  x="13.00" y="95.5" >jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:447</text>
 </g>
 <g >
-<title>java.lang.Object.wait0:-1 (49,138 samples, 100.00%)</title><rect x="10.0" y="37" width="1180.0" height="15.0" fill="rgb(253,91,4)" rx="2" ry="2" />
-<text  x="13.00" y="47.5" >java.lang.Object.wait0:-1</text>
+<title>java.lang.Thread.run:833 (48,562 samples, 99.36%)</title><rect x="10.0" y="117" width="1172.4" height="15.0" fill="rgb(225,95,16)" rx="2" ry="2" />
+<text  x="13.00" y="127.5" >java.lang.Thread.run:833</text>
 </g>
 <g >
-<title>java.lang.Thread.run:1589 (49,138 samples, 100.00%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(217,48,35)" rx="2" ry="2" />
-<text  x="13.00" y="143.5" >java.lang.Thread.run:1589</text>
+<title>java.lang.Object.wait:-1 (48,562 samples, 99.36%)</title><rect x="10.0" y="37" width="1172.4" height="15.0" fill="rgb(238,207,14)" rx="2" ry="2" />
+<text  x="13.00" y="47.5" >java.lang.Object.wait:-1</text>
 </g>
 <g >
-<title>jdk.jfr.internal.PlatformRecorder.periodicTask:505 (49,138 samples, 100.00%)</title><rect x="10.0" y="85" width="1180.0" height="15.0" fill="rgb(223,162,5)" rx="2" ry="2" />
-<text  x="13.00" y="95.5" >jdk.jfr.internal.PlatformRecorder.periodicTask:505</text>
+<title>jdk.jfr.internal.PlatformRecorder.periodicTask:507 (48,562 samples, 99.36%)</title><rect x="10.0" y="69" width="1172.4" height="15.0" fill="rgb(227,43,9)" rx="2" ry="2" />
+<text  x="13.00" y="79.5" >jdk.jfr.internal.PlatformRecorder.periodicTask:507</text>
 </g>
 <g >
-<title>jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:442 (49,138 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(230,135,47)" rx="2" ry="2" />
-<text  x="13.00" y="111.5" >jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:442</text>
+<title>all (48,877 samples, 100%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(253,191,28)" rx="2" ry="2" />
+<text  x="13.00" y="143.5" ></text>
+</g>
+<g >
+<title>jdk.internal.misc.InnocuousThread.run:162 (315 samples, 0.64%)</title><rect x="1182.4" y="117" width="7.6" height="15.0" fill="rgb(253,70,10)" rx="2" ry="2" />
+<text  x="1185.40" y="127.5" ></text>
+</g>
+<g >
+<title>jdk.jfr.internal.PlatformRecorder.takeNap:526 (48,562 samples, 99.36%)</title><rect x="10.0" y="53" width="1172.4" height="15.0" fill="rgb(207,40,41)" rx="2" ry="2" />
+<text  x="13.00" y="63.5" >jdk.jfr.internal.PlatformRecorder.takeNap:526</text>
+</g>
+<g >
+<title>java.lang.Thread.run:833 (315 samples, 0.64%)</title><rect x="1182.4" y="101" width="7.6" height="15.0" fill="rgb(214,119,19)" rx="2" ry="2" />
+<text  x="1185.40" y="111.5" ></text>
+</g>
+<g >
+<title>java.lang.ref.ReferenceQueue.remove:155 (315 samples, 0.64%)</title><rect x="1182.4" y="69" width="7.6" height="15.0" fill="rgb(253,221,20)" rx="2" ry="2" />
+<text  x="1185.40" y="79.5" ></text>
 </g>
 </g>
 </svg>

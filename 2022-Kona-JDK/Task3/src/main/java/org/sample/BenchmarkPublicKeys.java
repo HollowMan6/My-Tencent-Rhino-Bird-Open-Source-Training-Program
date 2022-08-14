@@ -9,21 +9,23 @@ import java.security.*;
 
 @State(Scope.Thread)
 public class BenchmarkPublicKeys {
-    KeyPair keyPair;
+    String prvKey;
+    SM2Util sm2;
 
     @Setup
     public void prepare() throws Exception {
-        keyPair = SM2Util.generateSm2KeyPair();
+        sm2 = new SM2Util();
+        prvKey = sm2.generatePrivateKeyHex();
     }
 
     @Benchmark
     public void sm2p256v1_compressed() throws Exception {
-        SM2Util.getHexPublicKey(keyPair.getPublic());
+        sm2.getHexPublicKey(prvKey);
     }
 
     @Benchmark
     public void sm2p256v1_uncompressed() throws Exception {
-        SM2Util.getHexPublicKeyUncompressed(keyPair.getPublic());
+        sm2.getHexPublicKeyUncompressed(prvKey);
     }
 
     public static void main(String[] args) throws Exception {
