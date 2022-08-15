@@ -38,24 +38,22 @@ public class ECCurveFp {
    * 解析 16 进制串为椭圆曲线点
    */
   public ECPointFp decodePointHex(String s) {
-    ECFieldElementFp x;
-    ECFieldElementFp y;
     switch (Integer.parseInt(s.substring(0, 2), 16)) {
       // 第一个字节
       case 0:
         return this.infinity;
       case 2:
-        x = this.fromBigInteger(new BigInteger(s.substring(2), 16));
-        // y^2 = x^3 + ax + b
-        y = fromBigInteger(
-            sqrtModuloPrime.sqrtP(x.multiply(x.square()).add(x.multiply(this.a)).add(this.b).toBigInteger(), this.q));
-        return new ECPointFp(this, x, y, null);
       case 3:
-        x = this.fromBigInteger(new BigInteger(s.substring(2), 16));
-        // y^2 = x^3 + ax + b
-        y = fromBigInteger(
-            this.q.subtract(sqrtModuloPrime.sqrtP(
-                x.multiply(x.square()).add(x.multiply(this.a)).add(this.b).toBigInteger(), this.q)));
+        ECFieldElementFp x = this.fromBigInteger(new BigInteger(s.substring(2), 16));
+        // 对p ≡ 3 (mod4)，即存在正整数u，使得p = 4u+3
+        // 计算y = (√ (x^3 + ax + b) % p)^(u+1) modp
+        ECFieldElementFp y = this.fromBigInteger(x.multiply(x.square()).add(
+            x.multiply(this.a)).add(this.b).toBigInteger().modPow(
+                this.q.divide(BigInteger.valueOf(4)).add(BigInteger.ONE), this.q));
+        // 算出结果2进制最后1位不等于第1个字节-2则取反
+        if (!y.toBigInteger().mod(BigInteger.TWO).equals(new BigInteger(s.substring(0, 2), 16).subtract(BigInteger.TWO))) {
+          y = y.negate();
+        }
         return new ECPointFp(this, x, y, null);
       case 4:
       case 6:

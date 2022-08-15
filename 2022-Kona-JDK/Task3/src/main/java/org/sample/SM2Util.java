@@ -93,7 +93,20 @@ public class SM2Util {
     return y.square().equals(x.multiply(x.square()).add(x.multiply(curve.a)).add(curve.b));
   }
 
-  public static void main(String[] args) {
+  /**
+   * 验证公钥是否等价，等价返回true
+   */
+  public boolean comparePublicKeyHex(String publicKey1, String publicKey2) {
+    ECPointFp point1 = curve.decodePointHex(publicKey1);
+    if (point1 == null) return false;
+
+    ECPointFp point2 = curve.decodePointHex(publicKey2);
+    if (point2 == null) return false;
+
+    return point1.equals(point2);
+  }
+
+  public static void main(String[] args) throws Exception {
     SM2Util sm2 = new SM2Util();
 
     String prvKey = sm2.generatePrivateKeyHex();
@@ -108,13 +121,19 @@ public class SM2Util {
     if (sm2.verifyPublicKey(pubKey)) {
       System.out.println("Public Key (Uncompressed) is valid");
     } else {
-      System.out.println("Public Key (Uncompressed) is invalid");
+      throw new Error("Public Key (Uncompressed) is invalid");
     }
 
     if (sm2.verifyPublicKey(pubKeyZip)) {
       System.out.println("Public Key is valid");
     } else {
-      System.out.println("Public Key is invalid");
+      throw new Error("Public Key is invalid");
+    }
+
+    if (sm2.comparePublicKeyHex(pubKey, pubKeyZip)) {
+      System.out.println("Public Keys are equivalent");
+    } else {
+      throw new Error("Public Keys are not equivalent");
     }
   }
 }
