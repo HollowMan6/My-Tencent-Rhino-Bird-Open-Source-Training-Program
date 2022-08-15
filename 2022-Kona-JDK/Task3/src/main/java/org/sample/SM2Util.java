@@ -54,10 +54,10 @@ public class SM2Util {
 
     String suffix = "03";
     if (PyI.mod(BigInteger.valueOf(2)).equals(BigInteger.ZERO)) {
-        suffix = "02";
+      suffix = "02";
     }
 
-   return (suffix + Px).toUpperCase();
+    return (suffix + Px).toUpperCase();
   }
 
   public String getHexPublicKeyUncompressed(String privateKey) {
@@ -72,7 +72,8 @@ public class SM2Util {
    * 补全16进制字符串
    */
   public String leftPad(String input, int num) {
-    if (input.length() >= num) return input;
+    if (input.length() >= num)
+      return input;
 
     return String.format("%0" + (num - input.length()) + "d", 0) + input;
   }
@@ -82,7 +83,8 @@ public class SM2Util {
    */
   public boolean verifyPublicKey(String publicKey) {
     ECPointFp point = curve.decodePointHex(publicKey);
-    if (point == null) return false;
+    if (point == null)
+      return false;
 
     ECFieldElementFp x = point.getX();
     ECFieldElementFp y = point.getY();
@@ -99,7 +101,7 @@ public class SM2Util {
 
     String pubKey = sm2.getHexPublicKeyUncompressed(prvKey);
     String pubKeyZip = sm2.getHexPublicKey(prvKey);
-    
+
     System.out.println("Public Key (Uncompressed): " + pubKey);
     System.out.println("Public Key: " + pubKeyZip);
 

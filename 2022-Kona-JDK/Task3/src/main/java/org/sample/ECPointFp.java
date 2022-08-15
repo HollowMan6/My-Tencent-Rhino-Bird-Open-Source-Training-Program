@@ -2,7 +2,7 @@ package org.sample;
 
 import java.math.BigInteger;
 
-class ECPointFp {
+public class ECPointFp {
   private ECCurveFp curve;
   private ECFieldElementFp x;
   private ECFieldElementFp y;
@@ -19,13 +19,15 @@ class ECPointFp {
   }
 
   public ECFieldElementFp getX() {
-    if (this.zinv == null) this.zinv = this.z.modInverse(this.curve.q);
+    if (this.zinv == null)
+      this.zinv = this.z.modInverse(this.curve.q);
 
     return this.curve.fromBigInteger(this.x.toBigInteger().multiply(this.zinv).mod(this.curve.q));
   }
 
   public ECFieldElementFp getY() {
-    if (this.zinv == null) this.zinv = this.z.modInverse(this.curve.q);
+    if (this.zinv == null)
+      this.zinv = this.z.modInverse(this.curve.q);
 
     return this.curve.fromBigInteger(this.y.toBigInteger().multiply(this.zinv).mod(this.curve.q));
   }
@@ -34,15 +36,20 @@ class ECPointFp {
    * 判断相等
    */
   public boolean equals(ECPointFp other) {
-    if (this.isInfinity()) return other.isInfinity();
-    if (other.isInfinity()) return this.isInfinity();
+    if (this.isInfinity())
+      return other.isInfinity();
+    if (other.isInfinity())
+      return this.isInfinity();
 
     // u = y2 * z1 - y1 * z2
-    BigInteger u = other.y.toBigInteger().multiply(this.z).subtract(this.y.toBigInteger().multiply(other.z)).mod(this.curve.q);
-    if (!u.equals(BigInteger.ZERO)) return false;
+    BigInteger u = other.y.toBigInteger().multiply(this.z).subtract(this.y.toBigInteger().multiply(other.z))
+        .mod(this.curve.q);
+    if (!u.equals(BigInteger.ZERO))
+      return false;
 
     // v = x2 * z1 - x1 * z2
-    BigInteger v = other.x.toBigInteger().multiply(this.z).subtract(this.x.toBigInteger().multiply(other.z)).mod(this.curve.q);
+    BigInteger v = other.x.toBigInteger().multiply(this.z).subtract(this.x.toBigInteger().multiply(other.z))
+        .mod(this.curve.q);
     return v.equals(BigInteger.ZERO);
   }
 
@@ -50,7 +57,8 @@ class ECPointFp {
    * 是否是无穷远点
    */
   public boolean isInfinity() {
-    if ((this.x == null) && (this.y == null)) return true;
+    if ((this.x == null) && (this.y == null))
+      return true;
     return this.z.equals(BigInteger.ZERO) && !this.y.toBigInteger().equals(BigInteger.ZERO);
   }
 
@@ -82,8 +90,10 @@ class ECPointFp {
    * z3 = λ10 * λ8
    */
   public ECPointFp add(ECPointFp b) {
-    if (this.isInfinity()) return b;
-    if (b.isInfinity()) return this;
+    if (this.isInfinity())
+      return b;
+    if (b.isInfinity())
+      return this;
 
     BigInteger x1 = this.x.toBigInteger();
     BigInteger y1 = this.y.toBigInteger();
@@ -136,8 +146,10 @@ class ECPointFp {
    * z3 = λ2 * λ5
    */
   public ECPointFp twice() {
-    if (this.isInfinity()) return this;
-    if (this.y.toBigInteger().signum() == 0) return this.curve.infinity;
+    if (this.isInfinity())
+      return this;
+    if (this.y.toBigInteger().signum() == 0)
+      return this.curve.infinity;
 
     BigInteger x1 = this.x.toBigInteger();
     BigInteger y1 = this.y.toBigInteger();
@@ -163,8 +175,10 @@ class ECPointFp {
    * 倍点计算
    */
   public ECPointFp multiply(BigInteger k) {
-    if (this.isInfinity()) return this;
-    if (k.signum() == 0) return this.curve.infinity;
+    if (this.isInfinity())
+      return this;
+    if (k.signum() == 0)
+      return this.curve.infinity;
 
     // 使用加减法
     BigInteger k3 = k.multiply(BigInteger.valueOf(3));

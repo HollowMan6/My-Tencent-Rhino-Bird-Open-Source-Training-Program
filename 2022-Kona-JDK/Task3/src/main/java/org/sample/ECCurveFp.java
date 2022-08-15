@@ -22,7 +22,8 @@ public class ECCurveFp {
    * 判断两个椭圆曲线是否相等
    */
   public boolean equals(ECCurveFp other) {
-    if (other == this) return true;
+    if (other == this)
+      return true;
     return (this.q.equals(other.q) && this.a.equals(other.a) && this.b.equals(other.b));
   }
 
@@ -46,12 +47,15 @@ public class ECCurveFp {
       case 2:
         x = this.fromBigInteger(new BigInteger(s.substring(2), 16));
         // y^2 = x^3 + ax + b
-        y = x.multiply(x.square()).add(x.multiply(this.a)).add(this.b).sqrt();
+        y = fromBigInteger(
+            sqrtModuloPrime.sqrtP(x.multiply(x.square()).add(x.multiply(this.a)).add(this.b).toBigInteger(), this.q));
         return new ECPointFp(this, x, y, null);
       case 3:
         x = this.fromBigInteger(new BigInteger(s.substring(2), 16));
         // y^2 = x^3 + ax + b
-        y = x.multiply(x.square()).add(x.multiply(this.a)).add(this.b).sqrt().negate();
+        y = fromBigInteger(
+            this.q.subtract(sqrtModuloPrime.sqrtP(
+                x.multiply(x.square()).add(x.multiply(this.a)).add(this.b).toBigInteger(), this.q)));
         return new ECPointFp(this, x, y, null);
       case 4:
       case 6:
@@ -60,7 +64,8 @@ public class ECCurveFp {
         String xHex = s.substring(2, len + 2);
         String yHex = s.substring(len + 2);
 
-        return new ECPointFp(this, this.fromBigInteger(new BigInteger(xHex, 16)), this.fromBigInteger(new BigInteger(yHex, 16)), null);
+        return new ECPointFp(this, this.fromBigInteger(new BigInteger(xHex, 16)),
+            this.fromBigInteger(new BigInteger(yHex, 16)), null);
       default:
         // 不支持
         return null;
