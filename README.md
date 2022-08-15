@@ -11,6 +11,9 @@
 [![GPL Licence](https://img.shields.io/badge/license-GPL-blue)](https://opensource.org/licenses/GPL-3.0/)
 [![Repo-Size](https://img.shields.io/github/repo-size/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program.svg)](../../archive/master.zip)
 
+## 2022 Participation Certificate 参与证书
+
+![](https://hollowman6.github.io/img/badges/RbOsTP.jpg)
 
 这里是我的"腾讯犀牛鸟开源人才培养计划"活动记录与成果
 
