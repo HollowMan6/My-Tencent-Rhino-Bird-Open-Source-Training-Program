@@ -13,7 +13,10 @@
 
 ## 2022 Participation Certificate 参与证书
 
-![](https://hollowman6.github.io/img/badges/RbOsTP.jpg)
+<p align="center">
+<img alt="Program" src="https://hollowman6.github.io/img/badges/RbOsTP.jpg" height="500px"/>
+<img alt="Course" src="https://hollowman6.github.io/img/badges/RbOsTP-Course.jpg" height="500px" />
+</p>
 
 这里是我的"腾讯犀牛鸟开源人才培养计划"活动记录与成果
 
