@@ -174,28 +174,39 @@ public class ECPointFp {
   /**
    * 倍点计算
    */
-  public ECPointFp multiply(BigInteger k) {
+  public ECPointFp multiply(BigInteger k, boolean useBinaryExpansion) {
     if (this.isInfinity())
       return this;
     if (k.signum() == 0)
       return this.curve.infinity;
 
-    // 使用加减法
-    BigInteger k3 = k.multiply(BigInteger.valueOf(3));
-    ECPointFp neg = this.negate();
-    ECPointFp Q = this;
-
-    for (int i = k3.bitLength() - 2; i > 0; i--) {
-      Q = Q.twice();
-
-      Boolean k3Bit = k3.testBit(i);
-      Boolean kBit = k.testBit(i);
-
-      if (k3Bit != kBit) {
-        Q = Q.add(k3Bit ? this : neg);
+    if (useBinaryExpansion) {
+      // 二进制展开法
+      ECPointFp Q = this.curve.infinity;
+      for (int j = k.bitLength() - 1; j >= 0; j--) {
+        Q = Q.twice();
+        if (k.testBit(j)) {
+          Q = Q.add(this);
+        }
       }
+      return Q;
+    } else {
+      // 使用加减法
+      BigInteger k3 = k.multiply(BigInteger.valueOf(3));
+      ECPointFp neg = this.negate();
+      ECPointFp Q = this;
+  
+      for (int i = k3.bitLength() - 2; i > 0; i--) {
+        Q = Q.twice();
+  
+        Boolean k3Bit = k3.testBit(i);
+        Boolean kBit = k.testBit(i);
+  
+        if (k3Bit != kBit) {
+          Q = Q.add(k3Bit ? this : neg);
+        }
+      }
+      return Q;
     }
-
-    return Q;
   }
 }

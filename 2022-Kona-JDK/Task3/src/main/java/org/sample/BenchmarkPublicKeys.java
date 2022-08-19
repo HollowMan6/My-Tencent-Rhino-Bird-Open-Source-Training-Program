@@ -19,13 +19,23 @@ public class BenchmarkPublicKeys {
     }
 
     @Benchmark
-    public void sm2p256v1_compressed() throws Exception {
-        sm2.getHexPublicKey(prvKey);
+    public void sm2p256v1_compressed_BinaryExpansion() throws Exception {
+        sm2.getHexPublicKey(prvKey, true);
     }
 
     @Benchmark
-    public void sm2p256v1_uncompressed() throws Exception {
-        sm2.getHexPublicKeyUncompressed(prvKey);
+    public void sm2p256v1_uncompressed_BinaryExpansion() throws Exception {
+        sm2.getHexPublicKeyUncompressed(prvKey, true);
+    }
+
+    @Benchmark
+    public void sm2p256v1_compressed_Addminus() throws Exception {
+        sm2.getHexPublicKey(prvKey, false);
+    }
+
+    @Benchmark
+    public void sm2p256v1_uncompressed_Addminus() throws Exception {
+        sm2.getHexPublicKeyUncompressed(prvKey, false);
     }
 
     public static void main(String[] args) throws Exception {

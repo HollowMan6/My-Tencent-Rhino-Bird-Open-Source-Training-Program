@@ -19,11 +19,19 @@ import java.security.*;
 @State(Scope.Thread)
 public class BenchmarkKeyGeneration {
     @Benchmark
-    public void sm2p256v1_homemade() throws Exception {
+    public void sm2p256v1_homemade_compressed_BinaryExpansion() throws Exception {
         SM2Util sm2 = new SM2Util();
 
         String prvKey = sm2.generatePrivateKeyHex();
-        String pubKeyZip = sm2.getHexPublicKey(prvKey);
+        String pubKeyZip = sm2.getHexPublicKey(prvKey, true);
+    }
+
+    @Benchmark
+    public void sm2p256v1_homemade_compressed_AddMinus() throws Exception {
+        SM2Util sm2 = new SM2Util();
+
+        String prvKey = sm2.generatePrivateKeyHex();
+        String pubKeyZip = sm2.getHexPublicKey(prvKey, false);
     }
 
     @Benchmark

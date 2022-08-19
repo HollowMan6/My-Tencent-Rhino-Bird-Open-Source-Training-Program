@@ -63,8 +63,8 @@ public class Test {
         String prvKey = sm2.generatePrivateKeyHex();
         System.out.println("Private Key: " + prvKey);
     
-        String pubKey = sm2.getHexPublicKeyUncompressed(prvKey);
-        String pubKeyZip = sm2.getHexPublicKey(prvKey);
+        String pubKey = sm2.getHexPublicKeyUncompressed(prvKey, false);
+        String pubKeyZip = sm2.getHexPublicKey(prvKey, false);
 
         System.out.println("Public Key (Uncompressed): " + pubKey);
         System.out.println("Public Key: " + pubKeyZip);

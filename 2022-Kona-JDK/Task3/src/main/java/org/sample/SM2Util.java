@@ -45,9 +45,9 @@ public class SM2Util {
   /**
    * 生成密钥对：publicKey = privateKey * G
    */
-  public String getHexPublicKey(String privateKey) {
+  public String getHexPublicKey(String privateKey, boolean useBinaryExpansion) {
     BigInteger d = new BigInteger(privateKey, 16);
-    ECPointFp P = G.multiply(d); // P = dG，p 为公钥，d 为私钥
+    ECPointFp P = G.multiply(d, useBinaryExpansion); // P = dG，p 为公钥，d 为私钥
 
     String Px = leftPad(P.getX().toBigInteger().toString(16), 64);
     BigInteger PyI = P.getY().toBigInteger();
@@ -60,9 +60,9 @@ public class SM2Util {
     return (suffix + Px).toUpperCase();
   }
 
-  public String getHexPublicKeyUncompressed(String privateKey) {
+  public String getHexPublicKeyUncompressed(String privateKey, boolean useBinaryExpansion) {
     BigInteger d = new BigInteger(privateKey, 16);
-    ECPointFp P = G.multiply(d); // P = dG，p 为公钥，d 为私钥
+    ECPointFp P = G.multiply(d, useBinaryExpansion); // P = dG，p 为公钥，d 为私钥
     String Px = leftPad(P.getX().toBigInteger().toString(16), 64);
     String Py = leftPad(P.getY().toBigInteger().toString(16), 64);
     return ("04" + Px + Py).toUpperCase();
@@ -112,8 +112,8 @@ public class SM2Util {
     String prvKey = sm2.generatePrivateKeyHex();
     System.out.println("Private Key: " + prvKey);
 
-    String pubKey = sm2.getHexPublicKeyUncompressed(prvKey);
-    String pubKeyZip = sm2.getHexPublicKey(prvKey);
+    String pubKey = sm2.getHexPublicKeyUncompressed(prvKey, false);
+    String pubKeyZip = sm2.getHexPublicKey(prvKey, false);
 
     System.out.println("Public Key (Uncompressed): " + pubKey);
     System.out.println("Public Key: " + pubKeyZip);
