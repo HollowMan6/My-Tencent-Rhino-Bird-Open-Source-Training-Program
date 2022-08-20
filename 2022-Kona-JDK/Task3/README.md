@@ -4,6 +4,8 @@ Generate the sm2p256v1 key pairs by purely mathematical methods, no other depend
 
 Test the key pairs by digital signature signing and verifying using Bouncy Castle.
 
+JMH Performance test for public key generation point multiplication using BinaryExpansion and Addminus method.
+
 JMH Performance test for compressed and uncompressed public key generation using homemade method.
 
 Also test the performance of Bouncy Castle and homemade for generating the sm2p256v1 key.
@@ -51,28 +53,57 @@ cat io-socket.txt | FlameGraph/flamegraph.pl --title "io-socket ${PWD##*.}" > io
 cat alloc.txt | FlameGraph/flamegraph.pl --title "alloc ${PWD##*.}" > alloc.svg
 ```
 
-### Compressed and Uncompressed
+### BinaryExpansion and Addminus
 #### cpu
-![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed-Throughput/cpu.svg)
-![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_uncompressed-Throughput/cpu.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_BinaryExpansion-Throughput/cpu.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_AddMinus-Throughput/cpu.svg)
 
 #### io-socket
-![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed-Throughput/io-socket.svg)
-![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_uncompressed-Throughput/io-socket.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_BinaryExpansion-Throughput/io-socket.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_AddMinus-Throughput/io-socket.svg)
 
 #### monitor-blocked
-![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed-Throughput/monitor-blocked.svg)
-![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_uncompressed-Throughput/monitor-blocked.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_BinaryExpansion-Throughput/monitor-blocked.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_AddMinus-Throughput/monitor-blocked.svg)
+
+### Compressed and Uncompressed (BinaryExpansion)
+#### cpu
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_BinaryExpansion-Throughput/cpu.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_uncompressed_BinaryExpansion-Throughput/cpu.svg)
+
+#### io-socket
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_BinaryExpansion-Throughput/io-socket.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_uncompressed_BinaryExpansion-Throughput/io-socket.svg)
+
+#### monitor-blocked
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_BinaryExpansion-Throughput/monitor-blocked.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_uncompressed_BinaryExpansion-Throughput/monitor-blocked.svg)
+
+### Compressed and Uncompressed (AddMinus)
+#### cpu
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_AddMinus-Throughput/cpu.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_uncompressed_AddMinus-Throughput/cpu.svg)
+
+#### io-socket
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_AddMinus-Throughput/io-socket.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_uncompressed_AddMinus-Throughput/io-socket.svg)
+
+#### monitor-blocked
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_compressed_AddMinus-Throughput/monitor-blocked.svg)
+![](jfr/org.sample.BenchmarkPublicKeys.sm2p256v1_uncompressed_AddMinus-Throughput/monitor-blocked.svg)
 
 ### Bouncy Castle and Homemade
 #### cpu
-![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_homemade-Throughput/cpu.svg)
+![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_homemade_compressed_BinaryExpansion-Throughput/cpu.svg)
+![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_homemade_compressed_AddMinus-Throughput/cpu.svg)
 ![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_bc-Throughput/cpu.svg)
 
 #### io-socket
-![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_homemade-Throughput/io-socket.svg)
+![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_homemade_compressed_BinaryExpansion-Throughput/io-socket.svg)
+![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_homemade_compressed_AddMinus-Throughput/io-socket.svg)
 ![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_bc-Throughput/io-socket.svg)
 
 #### monitor-blocked
-![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_homemade-Throughput/monitor-blocked.svg)
+![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_homemade_compressed_BinaryExpansion-Throughput/monitor-blocked.svg)
+![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_homemade_compressed_AddMinus-Throughput/monitor-blocked.svg)
 ![](jfr/org.sample.BenchmarkKeyGeneration.sm2p256v1_bc-Throughput/monitor-blocked.svg)

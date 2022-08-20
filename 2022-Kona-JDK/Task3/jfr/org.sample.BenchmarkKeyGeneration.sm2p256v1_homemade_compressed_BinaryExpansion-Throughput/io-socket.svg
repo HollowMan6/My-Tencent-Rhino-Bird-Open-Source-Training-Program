@@ -413,7 +413,7 @@
 ]]>
 </script>
 <rect x="0.0" y="0" width="1200.0" height="182.0" fill="url(#background)"  />
-<text id="title" x="600.00" y="24" >io-socket sm2p256v1_homemade-Throughput</text>
+<text id="title" x="600.00" y="24" >io-socket sm2p256v1_homemade_compressed_BinaryExpansion-Throughput</text>
 <text id="details" x="10.00" y="165" > </text>
 <text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
 <text id="search" x="1090.00" y="24" >Search</text>
@@ -421,32 +421,32 @@
 <text id="matched" x="1090.00" y="165" > </text>
 <g id="frames">
 <g >
-<title>java.io.FilterInputStream.read:105 (55 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(230,172,14)" rx="2" ry="2" />
-<text  x="13.00" y="111.5" >java.io.FilterInputStream.read:105</text>
-</g>
-<g >
-<title>java.io.FileInputStream.read:115 (55 samples, 100.00%)</title><rect x="10.0" y="37" width="1180.0" height="15.0" fill="rgb(229,0,11)" rx="2" ry="2" />
-<text  x="13.00" y="47.5" >java.io.FileInputStream.read:115</text>
-</g>
-<g >
-<title>org.openjdk.jmh.util.InputStreamDrainer.run:80 (55 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(227,137,16)" rx="2" ry="2" />
-<text  x="13.00" y="127.5" >org.openjdk.jmh.util.InputStreamDrainer.run:80</text>
-</g>
-<g >
-<title>java.io.BufferedInputStream.read1:284 (55 samples, 100.00%)</title><rect x="10.0" y="69" width="1180.0" height="15.0" fill="rgb(250,172,11)" rx="2" ry="2" />
-<text  x="13.00" y="79.5" >java.io.BufferedInputStream.read1:284</text>
-</g>
-<g >
-<title>java.io.BufferedInputStream.read:343 (55 samples, 100.00%)</title><rect x="10.0" y="85" width="1180.0" height="15.0" fill="rgb(234,36,52)" rx="2" ry="2" />
+<title>java.io.BufferedInputStream.read:343 (64 samples, 100.00%)</title><rect x="10.0" y="85" width="1180.0" height="15.0" fill="rgb(217,163,54)" rx="2" ry="2" />
 <text  x="13.00" y="95.5" >java.io.BufferedInputStream.read:343</text>
 </g>
 <g >
-<title>java.io.BufferedInputStream.fill:244 (55 samples, 100.00%)</title><rect x="10.0" y="53" width="1180.0" height="15.0" fill="rgb(216,211,30)" rx="2" ry="2" />
+<title>org.openjdk.jmh.util.InputStreamDrainer.run:80 (64 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(216,23,20)" rx="2" ry="2" />
+<text  x="13.00" y="127.5" >org.openjdk.jmh.util.InputStreamDrainer.run:80</text>
+</g>
+<g >
+<title>java.io.BufferedInputStream.fill:244 (64 samples, 100.00%)</title><rect x="10.0" y="53" width="1180.0" height="15.0" fill="rgb(243,6,19)" rx="2" ry="2" />
 <text  x="13.00" y="63.5" >java.io.BufferedInputStream.fill:244</text>
 </g>
 <g >
-<title>all (55 samples, 100%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(228,41,32)" rx="2" ry="2" />
+<title>java.io.FilterInputStream.read:105 (64 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(246,75,51)" rx="2" ry="2" />
+<text  x="13.00" y="111.5" >java.io.FilterInputStream.read:105</text>
+</g>
+<g >
+<title>java.io.BufferedInputStream.read1:284 (64 samples, 100.00%)</title><rect x="10.0" y="69" width="1180.0" height="15.0" fill="rgb(216,228,17)" rx="2" ry="2" />
+<text  x="13.00" y="79.5" >java.io.BufferedInputStream.read1:284</text>
+</g>
+<g >
+<title>all (64 samples, 100%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(221,22,4)" rx="2" ry="2" />
 <text  x="13.00" y="143.5" ></text>
+</g>
+<g >
+<title>java.io.FileInputStream.read:115 (64 samples, 100.00%)</title><rect x="10.0" y="37" width="1180.0" height="15.0" fill="rgb(216,189,27)" rx="2" ry="2" />
+<text  x="13.00" y="47.5" >java.io.FileInputStream.read:115</text>
 </g>
 </g>
 </svg>
