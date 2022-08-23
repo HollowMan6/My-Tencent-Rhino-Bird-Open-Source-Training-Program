@@ -14,7 +14,7 @@ public class BenchmarkPublicKeys {
 
     @Setup
     public void prepare() throws Exception {
-        sm2 = new SM2Util();
+        sm2 = new SM2Util(false);
         prvKey = sm2.generatePrivateKeyHex();
     }
 

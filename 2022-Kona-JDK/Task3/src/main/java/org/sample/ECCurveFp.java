@@ -10,12 +10,14 @@ public class ECCurveFp {
   public ECFieldElementFp a;
   public ECFieldElementFp b;
   public ECPointFp infinity;
+  private boolean jacob;
 
-  public ECCurveFp(BigInteger q, BigInteger a, BigInteger b) {
+  public ECCurveFp(BigInteger q, BigInteger a, BigInteger b, boolean jacob) {
     this.q = q;
     this.a = this.fromBigInteger(a);
     this.b = this.fromBigInteger(b);
-    this.infinity = new ECPointFp(this, null, null, null); // 无穷远点
+    this.jacob = jacob;
+    this.infinity = new ECPointFp(this, null, null, null, jacob); // 无穷远点
   }
 
   /**
@@ -54,7 +56,7 @@ public class ECCurveFp {
         if (!y.toBigInteger().mod(BigInteger.TWO).equals(new BigInteger(s.substring(0, 2), 16).subtract(BigInteger.TWO))) {
           y = y.negate();
         }
-        return new ECPointFp(this, x, y, null);
+        return new ECPointFp(this, x, y, null, this.jacob);
       case 4:
       case 6:
       case 7:
@@ -63,7 +65,7 @@ public class ECCurveFp {
         String yHex = s.substring(len + 2);
 
         return new ECPointFp(this, this.fromBigInteger(new BigInteger(xHex, 16)),
-            this.fromBigInteger(new BigInteger(yHex, 16)), null);
+            this.fromBigInteger(new BigInteger(yHex, 16)), null, this.jacob);
       default:
         // 不支持
         return null;

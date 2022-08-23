@@ -12,13 +12,13 @@ public class SM2Util {
   /**
    * 生成ecparam
    */
-  public SM2Util() {
+  public SM2Util(boolean jacob) {
     this.rng = new SecureRandom();
     // 椭圆曲线
     BigInteger p = new BigInteger("FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF", 16);
     BigInteger a = new BigInteger("FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC", 16);
     BigInteger b = new BigInteger("28E9FA9E9D9F5E344D5A9E4BCF6509A7F39789F515AB8F92DDBCBD414D940E93", 16);
-    this.curve = new ECCurveFp(p, a, b);
+    this.curve = new ECCurveFp(p, a, b, jacob);
 
     // 基点
     String gxHex = "32C4AE2C1F1981195F9904466A39C9948FE30BBFF2660BE1715A4589334C74C7";
@@ -107,7 +107,7 @@ public class SM2Util {
   }
 
   public static void main(String[] args) throws Exception {
-    SM2Util sm2 = new SM2Util();
+    SM2Util sm2 = new SM2Util(false);
 
     String prvKey = sm2.generatePrivateKeyHex();
     System.out.println("Private Key: " + prvKey);
