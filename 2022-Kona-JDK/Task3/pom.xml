@@ -78,7 +78,7 @@
                             <finalName>${uberjar.name}</finalName>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>org.sample.Test</mainClass>
+                                    <mainClass>org.sample.SM2Util</mainClass>
                                 </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>

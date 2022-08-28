@@ -18,6 +18,15 @@ import java.security.*;
 
 @State(Scope.Thread)
 public class BenchmarkKeyGeneration {
+    ECGenParameterSpec sm2Spec;
+    KeyPairGenerator kpg;
+
+    @Setup
+    public void prepare() throws Exception {
+        sm2Spec = new ECGenParameterSpec("sm2p256v1");
+        kpg = KeyPairGenerator.getInstance("EC", new BouncyCastleProvider());
+    }
+
     @Benchmark
     public void sm2p256v1_homemade_compressed_BinaryExpansion() throws Exception {
         SM2Util sm2 = new SM2Util(false);
@@ -36,10 +45,9 @@ public class BenchmarkKeyGeneration {
 
     @Benchmark
     public void sm2p256v1_bc() throws Exception {
-        final ECGenParameterSpec sm2Spec = new ECGenParameterSpec("sm2p256v1");
-        final KeyPairGenerator kpg = KeyPairGenerator.getInstance("EC", new BouncyCastleProvider());
         SecureRandom random = new SecureRandom();
         kpg.initialize(sm2Spec, random);
+
         KeyPair keyPair = kpg.generateKeyPair();
 
         BCECPrivateKey privateKey = (BCECPrivateKey) keyPair.getPrivate();
