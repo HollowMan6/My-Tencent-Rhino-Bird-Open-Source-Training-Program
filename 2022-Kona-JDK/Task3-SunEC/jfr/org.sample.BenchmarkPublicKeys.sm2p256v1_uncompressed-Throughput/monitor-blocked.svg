@@ -421,36 +421,36 @@
 <text id="matched" x="1090.00" y="181" > </text>
 <g id="frames">
 <g >
-<title>jdk.jfr.internal.PlatformRecorder.takeNap:524 (49,243 samples, 100.00%)</title><rect x="10.0" y="69" width="1180.0" height="15.0" fill="rgb(235,207,50)" rx="2" ry="2" />
-<text  x="13.00" y="79.5" >jdk.jfr.internal.PlatformRecorder.takeNap:524</text>
-</g>
-<g >
-<title>jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:442 (49,243 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(225,10,3)" rx="2" ry="2" />
-<text  x="13.00" y="111.5" >jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:442</text>
-</g>
-<g >
-<title>java.lang.Object.wait0:-1 (49,243 samples, 100.00%)</title><rect x="10.0" y="37" width="1180.0" height="15.0" fill="rgb(253,71,41)" rx="2" ry="2" />
+<title>java.lang.Object.wait0:-1 (49,099 samples, 100.00%)</title><rect x="10.0" y="37" width="1180.0" height="15.0" fill="rgb(216,66,16)" rx="2" ry="2" />
 <text  x="13.00" y="47.5" >java.lang.Object.wait0:-1</text>
 </g>
 <g >
-<title>all (49,243 samples, 100%)</title><rect x="10.0" y="149" width="1180.0" height="15.0" fill="rgb(230,47,21)" rx="2" ry="2" />
+<title>jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:442 (49,099 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(241,47,35)" rx="2" ry="2" />
+<text  x="13.00" y="111.5" >jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:442</text>
+</g>
+<g >
+<title>java.lang.Thread.run:1589 (49,099 samples, 100.00%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(217,67,11)" rx="2" ry="2" />
+<text  x="13.00" y="143.5" >java.lang.Thread.run:1589</text>
+</g>
+<g >
+<title>all (49,099 samples, 100%)</title><rect x="10.0" y="149" width="1180.0" height="15.0" fill="rgb(214,80,38)" rx="2" ry="2" />
 <text  x="13.00" y="159.5" ></text>
 </g>
 <g >
-<title>jdk.jfr.internal.PlatformRecorder$$Lambda$113+0x000000080017a690.1519956952.run:-1 (49,243 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(250,129,0)" rx="2" ry="2" />
-<text  x="13.00" y="127.5" >jdk.jfr.internal.PlatformRecorder$$Lambda$113+0x000000080017a690.1519956952.run:-1</text>
+<title>jdk.jfr.internal.PlatformRecorder$$Lambda$114+0x000000080017a950.1356110653.run:-1 (49,099 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(220,114,11)" rx="2" ry="2" />
+<text  x="13.00" y="127.5" >jdk.jfr.internal.PlatformRecorder$$Lambda$114+0x000000080017a950.1356110653.run:-1</text>
 </g>
 <g >
-<title>java.lang.Object.wait:366 (49,243 samples, 100.00%)</title><rect x="10.0" y="53" width="1180.0" height="15.0" fill="rgb(220,8,43)" rx="2" ry="2" />
-<text  x="13.00" y="63.5" >java.lang.Object.wait:366</text>
-</g>
-<g >
-<title>jdk.jfr.internal.PlatformRecorder.periodicTask:505 (49,243 samples, 100.00%)</title><rect x="10.0" y="85" width="1180.0" height="15.0" fill="rgb(210,19,31)" rx="2" ry="2" />
+<title>jdk.jfr.internal.PlatformRecorder.periodicTask:505 (49,099 samples, 100.00%)</title><rect x="10.0" y="85" width="1180.0" height="15.0" fill="rgb(208,50,39)" rx="2" ry="2" />
 <text  x="13.00" y="95.5" >jdk.jfr.internal.PlatformRecorder.periodicTask:505</text>
 </g>
 <g >
-<title>java.lang.Thread.run:1589 (49,243 samples, 100.00%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(224,185,51)" rx="2" ry="2" />
-<text  x="13.00" y="143.5" >java.lang.Thread.run:1589</text>
+<title>jdk.jfr.internal.PlatformRecorder.takeNap:524 (49,099 samples, 100.00%)</title><rect x="10.0" y="69" width="1180.0" height="15.0" fill="rgb(248,2,1)" rx="2" ry="2" />
+<text  x="13.00" y="79.5" >jdk.jfr.internal.PlatformRecorder.takeNap:524</text>
+</g>
+<g >
+<title>java.lang.Object.wait:366 (49,099 samples, 100.00%)</title><rect x="10.0" y="53" width="1180.0" height="15.0" fill="rgb(206,129,22)" rx="2" ry="2" />
+<text  x="13.00" y="63.5" >java.lang.Object.wait:366</text>
 </g>
 </g>
 </svg>
