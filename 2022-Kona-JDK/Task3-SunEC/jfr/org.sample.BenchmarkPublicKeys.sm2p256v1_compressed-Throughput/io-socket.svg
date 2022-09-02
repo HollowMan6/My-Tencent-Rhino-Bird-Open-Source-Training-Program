@@ -421,39 +421,39 @@
 <text id="matched" x="1090.00" y="181" > </text>
 <g id="frames">
 <g >
-<title>org.openjdk.jmh.util.InputStreamDrainer.run:80 (178 samples, 100.00%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(234,144,18)" rx="2" ry="2" />
-<text  x="13.00" y="143.5" >org.openjdk.jmh.util.InputStreamDrainer.run:80</text>
-</g>
-<g >
-<title>java.io.BufferedInputStream.read1:310 (178 samples, 100.00%)</title><rect x="10.0" y="69" width="1180.0" height="15.0" fill="rgb(213,128,23)" rx="2" ry="2" />
-<text  x="13.00" y="79.5" >java.io.BufferedInputStream.read1:310</text>
-</g>
-<g >
-<title>java.io.BufferedInputStream.implRead:382 (178 samples, 100.00%)</title><rect x="10.0" y="85" width="1180.0" height="15.0" fill="rgb(234,202,49)" rx="2" ry="2" />
+<title>java.io.BufferedInputStream.implRead:382 (166 samples, 100.00%)</title><rect x="10.0" y="85" width="1180.0" height="15.0" fill="rgb(251,164,1)" rx="2" ry="2" />
 <text  x="13.00" y="95.5" >java.io.BufferedInputStream.implRead:382</text>
 </g>
 <g >
-<title>java.io.FilterInputStream.read:95 (178 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(229,43,25)" rx="2" ry="2" />
+<title>java.io.FileInputStream.read:114 (15 samples, 9.04%)</title><rect x="10.0" y="37" width="106.6" height="15.0" fill="rgb(211,155,34)" rx="2" ry="2" />
+<text  x="13.00" y="47.5" >java.io.FileI..</text>
+</g>
+<g >
+<title>java.io.BufferedInputStream.read1:310 (166 samples, 100.00%)</title><rect x="10.0" y="69" width="1180.0" height="15.0" fill="rgb(221,158,38)" rx="2" ry="2" />
+<text  x="13.00" y="79.5" >java.io.BufferedInputStream.read1:310</text>
+</g>
+<g >
+<title>java.io.FilterInputStream.read:95 (166 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(225,218,38)" rx="2" ry="2" />
 <text  x="13.00" y="127.5" >java.io.FilterInputStream.read:95</text>
 </g>
 <g >
-<title>java.io.BufferedInputStream.fill:255 (178 samples, 100.00%)</title><rect x="10.0" y="53" width="1180.0" height="15.0" fill="rgb(221,50,13)" rx="2" ry="2" />
-<text  x="13.00" y="63.5" >java.io.BufferedInputStream.fill:255</text>
-</g>
-<g >
-<title>java.io.FileInputStream.read:114 (16 samples, 8.99%)</title><rect x="10.0" y="37" width="106.1" height="15.0" fill="rgb(243,224,13)" rx="2" ry="2" />
-<text  x="13.00" y="47.5" >java.io.File..</text>
-</g>
-<g >
-<title>java.io.BufferedInputStream.read:361 (178 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(230,129,21)" rx="2" ry="2" />
+<title>java.io.BufferedInputStream.read:361 (166 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(224,177,3)" rx="2" ry="2" />
 <text  x="13.00" y="111.5" >java.io.BufferedInputStream.read:361</text>
 </g>
 <g >
-<title>java.io.FileInputStream.read:116 (162 samples, 91.01%)</title><rect x="116.1" y="37" width="1073.9" height="15.0" fill="rgb(216,28,1)" rx="2" ry="2" />
-<text  x="119.07" y="47.5" >java.io.FileInputStream.read:116</text>
+<title>org.openjdk.jmh.util.InputStreamDrainer.run:80 (166 samples, 100.00%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(226,61,8)" rx="2" ry="2" />
+<text  x="13.00" y="143.5" >org.openjdk.jmh.util.InputStreamDrainer.run:80</text>
 </g>
 <g >
-<title>all (178 samples, 100%)</title><rect x="10.0" y="149" width="1180.0" height="15.0" fill="rgb(251,100,1)" rx="2" ry="2" />
+<title>java.io.FileInputStream.read:116 (151 samples, 90.96%)</title><rect x="116.6" y="37" width="1073.4" height="15.0" fill="rgb(210,5,22)" rx="2" ry="2" />
+<text  x="119.63" y="47.5" >java.io.FileInputStream.read:116</text>
+</g>
+<g >
+<title>java.io.BufferedInputStream.fill:255 (166 samples, 100.00%)</title><rect x="10.0" y="53" width="1180.0" height="15.0" fill="rgb(205,208,32)" rx="2" ry="2" />
+<text  x="13.00" y="63.5" >java.io.BufferedInputStream.fill:255</text>
+</g>
+<g >
+<title>all (166 samples, 100%)</title><rect x="10.0" y="149" width="1180.0" height="15.0" fill="rgb(209,135,42)" rx="2" ry="2" />
 <text  x="13.00" y="159.5" ></text>
 </g>
 </g>

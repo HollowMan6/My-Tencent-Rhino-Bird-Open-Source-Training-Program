@@ -22,34 +22,36 @@ public class BenchmarkKeyGeneration {
     KeyPairGenerator kpg;
     ECGenParameterSpec sm2Spec_bc;
     KeyPairGenerator kpg_bc;
-    KeyPair keyPair;
 
     @Setup
     public void prepare() throws Exception {
         sm2Spec = new ECGenParameterSpec("sm2p256v1");
-        kpg = KeyPairGenerator.getInstance("EC", new BouncyCastleProvider());
+        kpg = KeyPairGenerator.getInstance("EC", "SunEC");
         sm2Spec_bc = new ECGenParameterSpec("sm2p256v1");
         kpg_bc = KeyPairGenerator.getInstance("EC", new BouncyCastleProvider());
     }
 
     @Benchmark
     public void sm2p256v1_sunec() throws Exception {
-        keyPair = SM2Util.generateSm2KeyPair();
-        String pubKey = SM2Util.getHexPublicKey(keyPair.getPublic());
-        String prvKey = SM2Util.getHexPrivateKey(keyPair.getPrivate());
+        SecureRandom random = new SecureRandom();
+        kpg.initialize(sm2Spec, random);
+        KeyPair keyPair = kpg.genKeyPair();
+
+        // String pubKey = SM2Util.getHexPublicKey(keyPair.getPublic());
+        // String prvKey = SM2Util.getHexPrivateKey(keyPair.getPrivate());
     }
 
     @Benchmark
     public void sm2p256v1_bc() throws Exception {
         SecureRandom random = new SecureRandom();
         kpg_bc.initialize(sm2Spec_bc, random);
-        KeyPair keyPair = kpg.generateKeyPair();
+        KeyPair keyPair = kpg_bc.generateKeyPair();
 
         BCECPrivateKey privateKey = (BCECPrivateKey) keyPair.getPrivate();
         BCECPublicKey publicKey = (BCECPublicKey) keyPair.getPublic();
 
-        String pubKey = new String(Hex.encode(publicKey.getQ().getEncoded(true)));
-        String prvKey = privateKey.getD().toString(16);
+        // String pubKey = new String(Hex.encode(publicKey.getQ().getEncoded(true)));
+        // String prvKey = privateKey.getD().toString(16);
     }
 
     public static void main(String[] args) throws Exception {

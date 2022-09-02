@@ -1,3 +1,2 @@
-org.openjdk.jmh.util.InputStreamDrainer.run:80;java.io.FilterInputStream.read:95;java.io.BufferedInputStream.read:361;java.io.BufferedInputStream.implRead:382;java.io.BufferedInputStream.read1:310;java.io.BufferedInputStream.fill:255;java.io.FileInputStream.read:114 11
-org.openjdk.jmh.util.InputStreamDrainer.run:80;java.io.FilterInputStream.read:95;java.io.BufferedInputStream.read:361;java.io.BufferedInputStream.implRead:382;java.io.BufferedInputStream.read1:310;java.io.BufferedInputStream.fill:255;java.io.FileInputStream.read:116 183
+org.openjdk.jmh.util.InputStreamDrainer.run:80;java.io.FilterInputStream.read:95;java.io.BufferedInputStream.read:361;java.io.BufferedInputStream.implRead:382;java.io.BufferedInputStream.read1:310;java.io.BufferedInputStream.fill:255;java.io.FileInputStream.read:116 159
 
