@@ -35,7 +35,7 @@ java -jar target/benchmarks.jar -prof jfr
 
 The result clearly shows that the compressed public keys generation has a better performance than the uncompressed ones.
 
-the performance of SunEC for generating the sm2p256v1 key is better than Bouncy Castle's.
+The performance of Bouncy Castle for generating the sm2p256v1 key is better than SunEC's.
 
 ## JFR to FlameGraph
 Using `jfr-flame-graph`:

@@ -37,7 +37,7 @@ public class SM2Util {
 
   public String generatePrivateKeyHex() {
     BigInteger random = new BigInteger(n.bitLength(), rng);
-    BigInteger d = random.mod(n.subtract(BigInteger.ONE)).add(BigInteger.ONE); // 随机数
+    BigInteger d = random.mod(n.subtract(BigInteger.TWO)).add(BigInteger.ONE); // 随机数
     String privateKey = leftPad(d.toString(16), 64);
     return privateKey.toUpperCase();
   }
@@ -107,7 +107,7 @@ public class SM2Util {
   }
 
   public static void main(String[] args) throws Exception {
-    SM2Util sm2 = new SM2Util(false);
+    SM2Util sm2 = new SM2Util(true);
 
     String prvKey = sm2.generatePrivateKeyHex();
     System.out.println("Private Key: " + prvKey);

@@ -59,7 +59,7 @@ public class Test {
 
     public static void main(String[] args) throws Exception {
         Test test = new Test();
-        SM2Util sm2 = new SM2Util(false);
+        SM2Util sm2 = new SM2Util(true);
         String prvKey = sm2.generatePrivateKeyHex();
         System.out.println("Private Key: " + prvKey);
     

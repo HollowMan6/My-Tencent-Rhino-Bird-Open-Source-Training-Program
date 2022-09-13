@@ -48,6 +48,8 @@ As `secp256k1` has already been removed in JDK and now `secp256r1` does have a b
 ## Task 3
 [Requirement](https://docs.qq.com/doc/DUVhpTE9HcVJmZFNF)
 
+[The final report (in Chinese)]() is not limited to the following content, it also includes some more security analysis for different ways of realization.
+
 ### [With modification of SunEC provider](https://github.com/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program/tree/main/2022-Kona-JDK/Task3-SunEC)
 [Result](https://github.com/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program/tree/main/2022-Kona-JDK/Task3-SunEC/README.md)
 
@@ -134,22 +136,14 @@ BenchmarkPublicKeys.sm2p256v1_compressed         thrpt   25  1212201.531 ± 2481
 BenchmarkPublicKeys.sm2p256v1_uncompressed       thrpt   25   760033.805 ±  35058.515  ops/s
 ```
 
-Our code for generating the sm2p256v1 key pairs using SunEC also has a better performance than the Bouncy Castle.
-
-```log
-Benchmark                                         Mode  Cnt       Score       Error  Units
-BenchmarkKeyGeneration.sm2p256v1_bc              thrpt   25      470.064 ±     39.347  ops/s
-BenchmarkKeyGeneration.sm2p256v1_sunec           thrpt   25     2515.464 ±     45.194  ops/s
-```
-
 ### [Homemade](https://github.com/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program/tree/main/2022-Kona-JDK/Task3)
 Our realization refers to the JavaScript implementation [here](https://github.com/wechat-miniprogram/sm-crypto/tree/master/src/sm2), [Wikipedia Elliptic curve point multiplication](https://en.wikipedia.org/wiki/Elliptic_curve_point_multiplication) and the [official documentation](https://www.oscca.gov.cn/sca/xxgk/2010-12/17/1002386/files/b791a9f908bb4803875ab6aeeb7b4e03.pdf) .
 
 The homemade one is based on purely mathematical methods, no other dependencies.
 
-We use [SecureRandom](https://en.wikipedia.org/wiki/Cryptographically_secure_pseudorandom_number_generator) to generate the private key.
+We use [SecureRandom](https://en.wikipedia.org/wiki/Cryptographically_secure_pseudorandom_number_generator) to generate the private key, we also tried public key generation using the Standard Projective Coordinates and Jacobian Coordinates, as well as the binary expansion and addminus algorithm.
 
-[Result](https://github.com/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program/tree/main/2022-Kona-JDK/Task3/README.md)
+See [result](https://github.com/HollowMan6/My-Tencent-Rhino-Bird-Open-Source-Training-Program/tree/main/2022-Kona-JDK/Task3/README.md) for more performance comparisons.
 
 JMH Performance test for compressed and uncompressed public key generation result shows that the uncompressed public keys generation has almost the same performance as the compressed ones. Though it seems like a contradiction, here the uncompressed Y coordinate Hex caculation counts significantly smaller when you take the overall time into consideration.
 
@@ -157,12 +151,4 @@ JMH Performance test for compressed and uncompressed public key generation resul
 Benchmark                                         Mode  Cnt       Score       Error  Units
 BenchmarkPublicKeys.sm2p256v1_compressed         thrpt   25  786.038 ± 12.099  ops/s
 BenchmarkPublicKeys.sm2p256v1_uncompressed       thrpt   25  795.960 ±  8.557  ops/s
-```
-
-Our homemade code for generating the sm2p256v1 key pairs also has a better performance than the Bouncy Castle.
-
-```log
-Benchmark                                         Mode  Cnt       Score       Error  Units
-BenchmarkKeyGeneration.sm2p256v1_bc              thrpt   25  515.809 ± 13.833  ops/s
-BenchmarkKeyGeneration.sm2p256v1_homemade        thrpt   25  783.723 ± 13.842  ops/s
 ```

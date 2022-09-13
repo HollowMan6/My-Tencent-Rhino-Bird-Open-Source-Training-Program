@@ -29,7 +29,7 @@ public class BenchmarkKeyGeneration {
 
     @Benchmark
     public void sm2p256v1_homemade_compressed_BinaryExpansion() throws Exception {
-        SM2Util sm2 = new SM2Util(false);
+        SM2Util sm2 = new SM2Util(true);
 
         String prvKey = sm2.generatePrivateKeyHex();
         String pubKeyZip = sm2.getHexPublicKey(prvKey, true);
@@ -37,7 +37,7 @@ public class BenchmarkKeyGeneration {
 
     @Benchmark
     public void sm2p256v1_homemade_compressed_AddMinus() throws Exception {
-        SM2Util sm2 = new SM2Util(false);
+        SM2Util sm2 = new SM2Util(true);
 
         String prvKey = sm2.generatePrivateKeyHex();
         String pubKeyZip = sm2.getHexPublicKey(prvKey, false);

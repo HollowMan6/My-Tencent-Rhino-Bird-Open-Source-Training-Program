@@ -4,6 +4,8 @@ Generate the sm2p256v1 key pairs by purely mathematical methods, no other depend
 
 Test the key pairs by digital signature signing and verifying using Bouncy Castle.
 
+JMH Performance test for public key generation point multiplication using Standard Projective Coordinates and Jacobian Coordinates.
+
 JMH Performance test for public key generation point multiplication using BinaryExpansion and Addminus method.
 
 JMH Performance test for compressed and uncompressed public key generation using homemade method.
@@ -29,9 +31,11 @@ java -jar target/benchmarks.jar -prof jfr
 ### Result
 [result logs](result.log)
 
-The result clearly shows that the uncompressed public keys generation has almost the same performance asthe compressed ones.
+For public key generation point multiplication, Addminus is better than BinaryExpansion, and Jacobian Coordinates is better than Standard Projective Coordinates.
 
-the performance of homemade for generating the sm2p256v1 key is better than Bouncy Castle's.
+The result clearly shows that the uncompressed public keys generation has almost the same performance as the compressed ones.
+
+The performance of Bouncy Castle's generating the sm2p256v1 key is better than the homemade.
 
 ## JFR to FlameGraph
 Using `jfr-flame-graph`:
