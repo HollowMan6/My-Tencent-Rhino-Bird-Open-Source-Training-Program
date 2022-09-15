@@ -8,6 +8,8 @@ public class ECPointFp {
   private ECFieldElementFp y;
   private BigInteger z;
   private BigInteger zinv;
+  private BigInteger zSquaredInv;
+  private BigInteger zCubedInv;
   private boolean jacob;
 
   public ECPointFp(ECCurveFp curve, ECFieldElementFp x, ECFieldElementFp y, BigInteger z, boolean jacob) {
@@ -16,26 +18,42 @@ public class ECPointFp {
     this.y = y;
     // zinv == null 或 z * zinv == 1
     this.z = z == null ? BigInteger.ONE : z;
+    // 标准射影坐标系：
+    // zinv == null 或 z * zinv == 1
     this.zinv = null;
+    // Jacobian加重射影坐标系：
+    // zSquaredInv == null 或 z^2 * zSquaredInv == 1
+    this.zSquaredInv = null;
+    // zCubedInv == null 或 z^3 * zCubedInv == 1
+    this.zCubedInv = null;
     this.jacob = jacob;
   }
 
   public ECFieldElementFp getX() {
-    if (this.zinv == null)
-      this.zinv = this.z.modInverse(this.curve.q);
-
-    if (this.jacob)
-      return this.curve.fromBigInteger(this.x.toBigInteger().multiply(this.z.pow(2).modInverse(this.curve.q)).mod(this.curve.q));
-    return this.curve.fromBigInteger(this.x.toBigInteger().multiply(this.zinv).mod(this.curve.q));
+    if (this.jacob) {
+      if (this.zSquaredInv == null) {
+        this.zSquaredInv = this.z.pow(2).modInverse(this.curve.q);
+      }
+      return this.curve.fromBigInteger(this.x.toBigInteger().multiply(this.zSquaredInv).mod(this.curve.q));
+    }
+    else {
+      if (this.zinv == null)
+        this.zinv = this.z.modInverse(this.curve.q);
+      return this.curve.fromBigInteger(this.x.toBigInteger().multiply(this.zinv).mod(this.curve.q));
+    }
   }
 
   public ECFieldElementFp getY() {
-    if (this.zinv == null)
-      this.zinv = this.z.modInverse(this.curve.q);
-
-    if (this.jacob)
-      return this.curve.fromBigInteger(this.y.toBigInteger().multiply(this.z.pow(3).modInverse(this.curve.q)).mod(this.curve.q));
-    return this.curve.fromBigInteger(this.y.toBigInteger().multiply(this.zinv).mod(this.curve.q));
+    if (this.jacob) {
+      if (this.zCubedInv == null) {
+        this.zCubedInv = this.z.pow(3).modInverse(this.curve.q);
+      }
+      return this.curve.fromBigInteger(this.y.toBigInteger().multiply(this.zCubedInv).mod(this.curve.q));
+    } else {
+      if (this.zinv == null)
+        this.zinv = this.z.modInverse(this.curve.q);
+      return this.curve.fromBigInteger(this.y.toBigInteger().multiply(this.zinv).mod(this.curve.q));
+    }
   }
 
   /**
@@ -113,18 +131,18 @@ public class ECPointFp {
    * 
    * Jacobian加重射影坐标系：
    *
-   * λ1 = x1 * z2^2
-   * λ2 = x2 * z1^2
-   * λ3 = λ1 − λ2
-   * λ4 = y1 * z2^3
-   * λ5 = y2 * z1^3
-   * λ6 = λ4 − λ5
-   * λ7 = λ1 + λ2
-   * λ8 = λ4 + λ5
-   * x3 = λ6^2 - λ7 * λ3^2
-   * λ9 = λ7 * λ3^2 - 2 * x3
-   * y3 = (λ9 * λ6 - λ8 * λ3^3) / 2
-   * z3 = z1 * z2 * λ3
+   * U1 = x1 * z2^2
+   * U2 = x2 * z1^2
+   * H = U2 - U1
+   * S1 = y1 * z2^3
+   * S2 = y2 * z1^3
+   * R = S2 - S1
+   * H2 = H^2
+   * H3 = H * H2
+   * U1H2 = U1 * H2
+   * x3 = R^2 - H3 - 2 * U1H2
+   * y3 = R * (U1H2 - x3) - S1 * H3
+   * z3 = H * z1 * z2
    */
   public ECPointFp add(ECPointFp b) {
     if (this.isInfinity())
@@ -141,29 +159,28 @@ public class ECPointFp {
     BigInteger q = this.curve.q;
 
     if (this.jacob) {
-      BigInteger w1 = x1.multiply(z2.pow(2)).mod(q);
-      BigInteger w2 = x2.multiply(z1.pow(2)).mod(q);
-      BigInteger w3 = w1.subtract(w2);
-      BigInteger w4 = y1.multiply(z2.pow(3)).mod(q);
-      BigInteger w5 = y2.multiply(z1.pow(3)).mod(q);
-      BigInteger w6 = w4.subtract(w5);
+      BigInteger U1 = x1.multiply(z2.pow(2)).mod(q);
+      BigInteger U2 = x2.multiply(z1.pow(2)).mod(q);
+      BigInteger H = U2.subtract(U1).mod(q);
+      BigInteger S1 = y1.multiply(z2.pow(3)).mod(q);
+      BigInteger S2 = y2.multiply(z1.pow(3)).mod(q);
+      BigInteger R = S2.subtract(S1).mod(q);
   
-      if (BigInteger.ZERO.equals(w3)) {
-        if (BigInteger.ZERO.equals(w6)) {
+      if (BigInteger.ZERO.equals(H)) {
+        if (BigInteger.ZERO.equals(R)) {
           return this.twice(); // this == b，计算自加
         }
         return this.curve.infinity; // this == -b，则返回无穷远点
       }
   
-      BigInteger w7 = w1.add(w2);
-      BigInteger w8 = w4.add(w5);
+      BigInteger H2 = H.pow(2).mod(q);
+      BigInteger H3 = H.multiply(H2).mod(q);
   
-      BigInteger x3 = w6.pow(2).subtract(w7.multiply(w3.pow(2))).mod(q);
+      BigInteger U1H2 = U1.multiply(H2).mod(q);
 
-      BigInteger w9 = w7.multiply(w3.pow(2)).subtract(x3.shiftLeft(1));
-
-      BigInteger y3 = w9.multiply(w6).subtract(w8.multiply(w3.pow(3))).shiftRight(1).mod(q);
-      BigInteger z3 = z1.multiply(z2).multiply(w3).mod(q);
+      BigInteger x3 = R.pow(2).subtract(H3).subtract(U1H2.shiftLeft(1)).mod(q);
+      BigInteger y3 = R.multiply(U1H2.subtract(x3)).subtract(S1.multiply(H3)).mod(q);
+      BigInteger z3 = H.multiply(z1).multiply(z2).mod(q);
   
       return new ECPointFp(this.curve, this.curve.fromBigInteger(x3), this.curve.fromBigInteger(y3), z3, this.jacob);
     } else {
@@ -212,9 +229,10 @@ public class ECPointFp {
    *
    * Jacobian加重射影坐标系：
    *
+   * YSQ = y1^2
    * λ1 = 3 * x1^2 + a * z1^4
-   * λ2 = 4 * x1 * y1^2
-   * λ3 = 8 * y1^4
+   * λ2 = 4 * x1 * YSQ
+   * λ3 = 8 * YSQ^2
    * x3 = λ1^2 - 2 * λ2
    * y3 = λ1 * (λ2 − x3) − λ3
    * z3 = 2 * y1 * z1
@@ -232,9 +250,10 @@ public class ECPointFp {
     BigInteger a = this.curve.a.toBigInteger();
 
     if (this.jacob) {
+      BigInteger YSQ = y1.pow(2).mod(q);
       BigInteger w1 = x1.pow(2).multiply(BigInteger.valueOf(3)).add(a.multiply(z1.pow(4))).mod(q);
-      BigInteger w2 = y1.pow(2).multiply(x1).shiftLeft(2).mod(q);
-      BigInteger w3 = y1.pow(4).shiftLeft(3).mod(q);
+      BigInteger w2 = YSQ.multiply(x1).shiftLeft(2).mod(q);
+      BigInteger w3 = YSQ.pow(2).shiftLeft(3).mod(q);
 
       BigInteger x3 = w1.pow(2).subtract(w2.shiftLeft(1)).mod(q);
       BigInteger y3 = w1.multiply(w2.subtract(x3)).subtract(w3).mod(q);
