@@ -1,6 +1,6 @@
 <?xml version="1.0" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg version="1.1" width="1200" height="198" onload="init(evt)" viewBox="0 0 1200 198" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<svg version="1.1" width="1200" height="182" onload="init(evt)" viewBox="0 0 1200 182" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
 <!-- NOTES:  -->
 <defs>
@@ -412,45 +412,41 @@
 	}
 ]]>
 </script>
-<rect x="0.0" y="0" width="1200.0" height="198.0" fill="url(#background)"  />
+<rect x="0.0" y="0" width="1200.0" height="182.0" fill="url(#background)"  />
 <text id="title" x="600.00" y="24" >monitor-blocked sm2p256v1_homemade_compressed_AddMinus-Throughput</text>
-<text id="details" x="10.00" y="181" > </text>
+<text id="details" x="10.00" y="165" > </text>
 <text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
 <text id="search" x="1090.00" y="24" >Search</text>
 <text id="ignorecase" x="1174.00" y="24" >ic</text>
-<text id="matched" x="1090.00" y="181" > </text>
+<text id="matched" x="1090.00" y="165" > </text>
 <g id="frames">
 <g >
-<title>jdk.jfr.internal.PlatformRecorder$$Lambda$126+0x00000008001c3750.1259554989.run:-1 (49,233 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(250,155,51)" rx="2" ry="2" />
-<text  x="13.00" y="127.5" >jdk.jfr.internal.PlatformRecorder$$Lambda$126+0x00000008001c3750.1259554989.run:-1</text>
+<title>jdk.jfr.internal.PlatformRecorder.takeNap:526 (48,825 samples, 100.00%)</title><rect x="10.0" y="53" width="1180.0" height="15.0" fill="rgb(248,8,21)" rx="2" ry="2" />
+<text  x="13.00" y="63.5" >jdk.jfr.internal.PlatformRecorder.takeNap:526</text>
 </g>
 <g >
-<title>java.lang.Thread.run:1589 (49,233 samples, 100.00%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(218,214,1)" rx="2" ry="2" />
-<text  x="13.00" y="143.5" >java.lang.Thread.run:1589</text>
+<title>all (48,825 samples, 100%)</title><rect x="10.0" y="133" width="1180.0" height="15.0" fill="rgb(206,148,26)" rx="2" ry="2" />
+<text  x="13.00" y="143.5" ></text>
 </g>
 <g >
-<title>jdk.jfr.internal.PlatformRecorder.takeNap:524 (49,233 samples, 100.00%)</title><rect x="10.0" y="69" width="1180.0" height="15.0" fill="rgb(225,76,49)" rx="2" ry="2" />
-<text  x="13.00" y="79.5" >jdk.jfr.internal.PlatformRecorder.takeNap:524</text>
+<title>java.lang.Thread.run:833 (48,825 samples, 100.00%)</title><rect x="10.0" y="117" width="1180.0" height="15.0" fill="rgb(238,224,52)" rx="2" ry="2" />
+<text  x="13.00" y="127.5" >java.lang.Thread.run:833</text>
 </g>
 <g >
-<title>jdk.jfr.internal.PlatformRecorder.periodicTask:505 (49,233 samples, 100.00%)</title><rect x="10.0" y="85" width="1180.0" height="15.0" fill="rgb(225,227,28)" rx="2" ry="2" />
-<text  x="13.00" y="95.5" >jdk.jfr.internal.PlatformRecorder.periodicTask:505</text>
+<title>java.lang.Object.wait:-1 (48,825 samples, 100.00%)</title><rect x="10.0" y="37" width="1180.0" height="15.0" fill="rgb(223,138,8)" rx="2" ry="2" />
+<text  x="13.00" y="47.5" >java.lang.Object.wait:-1</text>
 </g>
 <g >
-<title>java.lang.Object.wait0:-1 (49,233 samples, 100.00%)</title><rect x="10.0" y="37" width="1180.0" height="15.0" fill="rgb(247,129,30)" rx="2" ry="2" />
-<text  x="13.00" y="47.5" >java.lang.Object.wait0:-1</text>
+<title>jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:447 (48,825 samples, 100.00%)</title><rect x="10.0" y="85" width="1180.0" height="15.0" fill="rgb(213,185,1)" rx="2" ry="2" />
+<text  x="13.00" y="95.5" >jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:447</text>
 </g>
 <g >
-<title>java.lang.Object.wait:366 (49,233 samples, 100.00%)</title><rect x="10.0" y="53" width="1180.0" height="15.0" fill="rgb(226,1,6)" rx="2" ry="2" />
-<text  x="13.00" y="63.5" >java.lang.Object.wait:366</text>
+<title>jdk.jfr.internal.PlatformRecorder.periodicTask:507 (48,825 samples, 100.00%)</title><rect x="10.0" y="69" width="1180.0" height="15.0" fill="rgb(252,138,48)" rx="2" ry="2" />
+<text  x="13.00" y="79.5" >jdk.jfr.internal.PlatformRecorder.periodicTask:507</text>
 </g>
 <g >
-<title>all (49,233 samples, 100%)</title><rect x="10.0" y="149" width="1180.0" height="15.0" fill="rgb(242,53,9)" rx="2" ry="2" />
-<text  x="13.00" y="159.5" ></text>
-</g>
-<g >
-<title>jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:442 (49,233 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(210,29,31)" rx="2" ry="2" />
-<text  x="13.00" y="111.5" >jdk.jfr.internal.PlatformRecorder.lambda$startDiskMonitor$1:442</text>
+<title>jdk.jfr.internal.PlatformRecorder$$Lambda$97+0x0000000800c68408.651569764.run:-1 (48,825 samples, 100.00%)</title><rect x="10.0" y="101" width="1180.0" height="15.0" fill="rgb(209,189,49)" rx="2" ry="2" />
+<text  x="13.00" y="111.5" >jdk.jfr.internal.PlatformRecorder$$Lambda$97+0x0000000800c68408.651569764.run:-1</text>
 </g>
 </g>
 </svg>
