@@ -129,20 +129,22 @@ public class ECPointFp {
    * y3 = λ6 * (λ9 * λ1 − λ11) − λ4 * λ10
    * z3 = λ10 * λ8
    * 
-   * Jacobian加重射影坐标系：
+   * Jacobian加重射影坐标系(add-2007-bl)：
    *
-   * U1 = x1 * z2^2
-   * U2 = x2 * z1^2
-   * H = U2 - U1
-   * S1 = y1 * z2^3
-   * S2 = y2 * z1^3
-   * R = S2 - S1
-   * H2 = H^2
-   * H3 = H * H2
-   * U1H2 = U1 * H2
-   * x3 = R^2 - H3 - 2 * U1H2
-   * y3 = R * (U1H2 - x3) - S1 * H3
-   * z3 = H * z1 * z2
+   * Z1Z1 = Z12
+   * Z2Z2 = Z22
+   * U1 = X1*Z2Z2
+   * U2 = X2*Z1Z1
+   * S1 = Y1*Z2*Z2Z2
+   * S2 = Y2*Z1*Z1Z1
+   * H = U2-U1
+   * I = (2*H)2
+   * J = H*I
+   * r = 2*(S2-S1)
+   * V = U1*I
+   * X3 = r2-J-2*V
+   * Y3 = r*(V-X3)-2*S1*J
+   * Z3 = ((Z1+Z2)2-Z1Z1-Z2Z2)*H
    */
   public ECPointFp add(ECPointFp b) {
     if (this.isInfinity())
@@ -150,37 +152,38 @@ public class ECPointFp {
     if (b.isInfinity())
       return this;
 
+    BigInteger q = this.curve.q;
+
     BigInteger x1 = this.x.toBigInteger();
     BigInteger y1 = this.y.toBigInteger();
     BigInteger z1 = this.z;
     BigInteger x2 = b.x.toBigInteger();
     BigInteger y2 = b.y.toBigInteger();
     BigInteger z2 = b.z;
-    BigInteger q = this.curve.q;
 
     if (this.jacob) {
-      BigInteger U1 = x1.multiply(z2.pow(2)).mod(q);
-      BigInteger U2 = x2.multiply(z1.pow(2)).mod(q);
-      BigInteger H = U2.subtract(U1).mod(q);
-      BigInteger S1 = y1.multiply(z2.pow(3)).mod(q);
-      BigInteger S2 = y2.multiply(z1.pow(3)).mod(q);
-      BigInteger R = S2.subtract(S1).mod(q);
+      BigInteger z1z1 = this.z.pow(2).mod(q);
+      BigInteger z2z2 = b.z.pow(2).mod(q);
+      BigInteger u1 = x1.multiply(z2z2).mod(q);
+      BigInteger u2 = x2.multiply(z1z1).mod(q);
+      BigInteger s1 = y1.multiply(z2.multiply(z2z2)).mod(q);
+      BigInteger s2 = y2.multiply(z1.multiply(z1z1)).mod(q);
+      BigInteger h = u2.subtract(u1).mod(q);
+      BigInteger r = s2.subtract(s1).shiftLeft(1).mod(q);
   
-      if (BigInteger.ZERO.equals(H)) {
-        if (BigInteger.ZERO.equals(R)) {
+      if (BigInteger.ZERO.equals(h)) {
+        if (BigInteger.ZERO.equals(r)) {
           return this.twice(); // this == b，计算自加
         }
         return this.curve.infinity; // this == -b，则返回无穷远点
       }
   
-      BigInteger H2 = H.pow(2).mod(q);
-      BigInteger H3 = H.multiply(H2).mod(q);
-  
-      BigInteger U1H2 = U1.multiply(H2).mod(q);
-
-      BigInteger x3 = R.pow(2).subtract(H3).subtract(U1H2.shiftLeft(1)).mod(q);
-      BigInteger y3 = R.multiply(U1H2.subtract(x3)).subtract(S1.multiply(H3)).mod(q);
-      BigInteger z3 = H.multiply(z1).multiply(z2).mod(q);
+      BigInteger i = h.pow(2).shiftLeft(2).mod(q);
+      BigInteger j = h.multiply(i).mod(q);
+      BigInteger v = u1.multiply(i).mod(q);
+      BigInteger x3 = r.pow(2).subtract(j).subtract(v.shiftLeft(1)).mod(q);
+      BigInteger y3 = r.multiply(v.subtract(x3)).subtract(s1.multiply(j).shiftLeft(1)).mod(q);
+      BigInteger z3 = h.multiply(z1.add(z2).pow(2).subtract(z1z1).subtract(z2z2)).mod(q);
   
       return new ECPointFp(this.curve, this.curve.fromBigInteger(x3), this.curve.fromBigInteger(y3), z3, this.jacob);
     } else {
@@ -227,15 +230,18 @@ public class ECPointFp {
    * y3 = λ1 * (4 * λ4 − λ6) − 2 * λ5 * λ3
    * z3 = λ2 * λ5
    *
-   * Jacobian加重射影坐标系：
+   * Jacobian加重射影坐标系(dbl-2007-bl)：
    *
-   * YSQ = y1^2
-   * λ1 = 3 * x1^2 + a * z1^4
-   * λ2 = 4 * x1 * YSQ
-   * λ3 = 8 * YSQ^2
-   * x3 = λ1^2 - 2 * λ2
-   * y3 = λ1 * (λ2 − x3) − λ3
-   * z3 = 2 * y1 * z1
+   * XX = X12
+   * YY = Y12
+   * YYYY = YY2
+   * ZZ = Z12
+   * S = 2*((X1+YY)2-XX-YYYY)
+   * M = 3*XX+a*ZZ2
+   * T = M2-2*S
+   * X3 = T
+   * Y3 = M*(S-T)-8*YYYY
+   * Z3 = (Y1+Z1)2-YY-ZZ
    */
   public ECPointFp twice() {
     if (this.isInfinity())
@@ -243,27 +249,31 @@ public class ECPointFp {
     if (this.y.toBigInteger().signum() == 0)
       return this.curve.infinity;
 
-    BigInteger x1 = this.x.toBigInteger();
-    BigInteger y1 = this.y.toBigInteger();
-    BigInteger z1 = this.z;
     BigInteger q = this.curve.q;
+
+    BigInteger x1 = this.x.toBigInteger();
+    BigInteger xx = x1.pow(2).mod(q);
+    BigInteger y1 = this.y.toBigInteger();
+    BigInteger yy = y1.pow(2).mod(q);
+    BigInteger z1 = this.z;
+    BigInteger zz = z1.pow(2).mod(q);
+
     BigInteger a = this.curve.a.toBigInteger();
 
     if (this.jacob) {
-      BigInteger YSQ = y1.pow(2).mod(q);
-      BigInteger w1 = x1.pow(2).multiply(BigInteger.valueOf(3)).add(a.multiply(z1.pow(4))).mod(q);
-      BigInteger w2 = YSQ.multiply(x1).shiftLeft(2).mod(q);
-      BigInteger w3 = YSQ.pow(2).shiftLeft(3).mod(q);
+      BigInteger yyyy = yy.pow(2).mod(q);
+      BigInteger s = x1.add(yy).pow(2).subtract(xx).subtract(yyyy).shiftLeft(1).mod(q);
+      BigInteger m = xx.shiftLeft(1).add(xx).add(a.multiply(zz.pow(2))).mod(q);
 
-      BigInteger x3 = w1.pow(2).subtract(w2.shiftLeft(1)).mod(q);
-      BigInteger y3 = w1.multiply(w2.subtract(x3)).subtract(w3).mod(q);
-      BigInteger z3 = y1.multiply(z1).shiftLeft(1).mod(q);
+      BigInteger x3 = m.pow(2).subtract(s.shiftLeft(1)).mod(q);
+      BigInteger y3 = m.multiply(s.subtract(x3)).subtract(yyyy.shiftLeft(3)).mod(q);
+      BigInteger z3 = y1.add(z1).pow(2).subtract(yy).subtract(zz).mod(q);
 
       return new ECPointFp(this.curve, this.curve.fromBigInteger(x3), this.curve.fromBigInteger(y3), z3, this.jacob);
     } else {
-      BigInteger w1 = x1.pow(2).multiply(BigInteger.valueOf(3)).add(a.multiply(z1.pow(2))).mod(q);
+      BigInteger w1 = xx.multiply(BigInteger.valueOf(3)).add(a.multiply(zz)).mod(q);
       BigInteger w2 = y1.shiftLeft(1).multiply(z1).mod(q);
-      BigInteger w3 = y1.pow(2).mod(q);
+      BigInteger w3 = yy.mod(q);
       BigInteger w4 = w3.multiply(x1).multiply(z1).mod(q);
       BigInteger w5 = w2.pow(2).mod(q);
       BigInteger w6 = w1.pow(2).subtract(w4.shiftLeft(3)).mod(q);
