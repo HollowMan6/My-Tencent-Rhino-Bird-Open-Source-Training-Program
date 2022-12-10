@@ -14,10 +14,11 @@
 ## 2022 Certificate 证书
 
 <p align="center">
-<img alt="Program" src="https://hollowman6.github.io/img/badges/RbOsTP.jpg" height="280px"/>
-<img alt="Program" src="https://hollowman6.github.io/img/badges/RbOsTP-Excellent.jpg" height="280px"/>
-<img alt="Program" src="https://hollowman6.github.io/img/badges/RbOsTP-Finish.jpg" height="280px"/>
-<img alt="Course" src="https://hollowman6.github.io/img/badges/RbOsTP-Course.jpg" height="280px" />
+<img alt="Program" src="https://hollowman6.github.io/img/badges/Tencent-OpenSource.jpg" height="224px"/>
+<img alt="Program" src="https://hollowman6.github.io/img/badges/RbOsTP.jpg" height="224px"/>
+<img alt="Program" src="https://hollowman6.github.io/img/badges/RbOsTP-Excellent.jpg" height="224px"/>
+<img alt="Program" src="https://hollowman6.github.io/img/badges/RbOsTP-Finish.jpg" height="224px"/>
+<img alt="Course" src="https://hollowman6.github.io/img/badges/RbOsTP-Course.jpg" height="224px" />
 </p>
 
 这里是我的"腾讯犀牛鸟开源人才培养计划"活动记录与成果
